@@ -76,3 +76,8 @@ const stop = async (): Promise<void> => {
 
 process.on("SIGINT", () => void stop().finally(() => process.exit(0)));
 process.on("SIGTERM", () => void stop().finally(() => process.exit(0)));
+process.on("message", (message: unknown) => {
+  if ((message as { type?: unknown } | null)?.type === "state-hub.stop") {
+    void stop().finally(() => process.exit(0));
+  }
+});
