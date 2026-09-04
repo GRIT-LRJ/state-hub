@@ -1,0 +1,17 @@
+{
+  "name": "@state-hub/emit-cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "state-hub-emit": "./dist/main.js",
+    "state-hub-codex-hook": "./dist/codex-hook.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@napi-rs/keyring": "^2.0.0"
+  }
+}

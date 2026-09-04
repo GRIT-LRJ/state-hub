@@ -1,0 +1,49 @@
+{
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          { "type": "command", "command": "state-hub-codex-hook", "command_windows": "state-hub-codex-hook", "async": false, "timeout": 2 }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^request_user_input$",
+        "hooks": [
+          { "type": "command", "command": "state-hub-codex-hook", "command_windows": "state-hub-codex-hook", "async": false, "timeout": 2 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^request_user_input$",
+        "hooks": [
+          { "type": "command", "command": "state-hub-codex-hook", "command_windows": "state-hub-codex-hook", "async": false, "timeout": 2 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "state-hub-codex-hook", "command_windows": "state-hub-codex-hook", "async": false, "timeout": 2 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "state-hub-codex-hook", "command_windows": "state-hub-codex-hook", "async": false, "timeout": 2 }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "state-hub-codex-hook", "command_windows": "state-hub-codex-hook", "async": false, "timeout": 2 }
+        ]
+      }
+    ]
+  }
+}

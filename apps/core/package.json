@@ -1,0 +1,38 @@
+{
+  "name": "@state-hub/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main.js",
+  "bin": "./dist/main.js",
+  "pkg": {
+    "assets": [
+      "../../node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:performance": "vitest run src/performance.test.ts",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@state-hub/domain": "workspace:*",
+    "@state-hub/protocol": "workspace:*",
+    "@state-hub/sdk": "workspace:*",
+    "@napi-rs/keyring": "^1.2.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "better-sqlite3": "^12.2.0",
+    "fastify": "^5.5.0"
+  },
+  "optionalDependencies": {
+    "node-hid": "^3.2.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "tsx": "^4.20.5"
+  }
+}

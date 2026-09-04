@@ -1,0 +1,18 @@
+:root {
+  font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+  color: #17171f;
+  background: #f5f5f8;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 760px; min-height: 100vh; }
+.app-shell { min-height: 100vh; background: radial-gradient(circle at 15% 0%, #ececff 0, #f5f5f8 32rem); }
+.app-header { height: auto; min-height: 76px; padding: 14px 28px; background: rgba(255, 255, 255, .88); border-bottom: 1px solid #e7e7ee; display: flex; align-items: center; justify-content: space-between; backdrop-filter: blur(18px); }
+.app-header h3 { margin: 0 !important; line-height: 1.2 !important; }
+.brand-mark { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; font-size: 22px; color: #fff; background: linear-gradient(145deg, #6b6be8, #4747a8); box-shadow: 0 8px 20px rgba(71, 71, 168, .25); }
+.content { padding: 24px 28px 40px; display: grid; gap: 18px; }
+.stats .ant-card { flex: 1 1 180px; min-width: 180px; box-shadow: 0 8px 28px rgba(24, 24, 48, .05); }
+.data-card { box-shadow: 0 8px 28px rgba(24, 24, 48, .05); }
+.data-card code { display: inline-block; max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #4e4e74; }
+.footer { text-align: center; color: #74748a; background: transparent; }
