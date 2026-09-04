@@ -60,6 +60,16 @@ CREATE TABLE IF NOT EXISTS claims (
   PRIMARY KEY (producer_id, scope_id, signal_id)
 );
 
+CREATE TABLE IF NOT EXISTS claim_expirations (
+  producer_id TEXT NOT NULL,
+  scope_id TEXT NOT NULL,
+  signal_id TEXT NOT NULL,
+  claim_revision INTEGER NOT NULL,
+  expires_at TEXT NOT NULL,
+  applied_at TEXT NOT NULL,
+  PRIMARY KEY (producer_id, scope_id, signal_id, claim_revision)
+);
+
 CREATE TABLE IF NOT EXISTS occurrence_events (
   producer_id TEXT NOT NULL,
   event_id TEXT NOT NULL,

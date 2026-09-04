@@ -87,6 +87,27 @@ describe("arbitration", () => {
     expect(result[0]?.contributorBindingIds).toEqual(["high-b", "high-a", "low"]);
   });
 
+  it("uses the latest claim revision when urgency and binding order tie", () => {
+    const result = arbitrate(
+      [
+        candidate({
+          bindingId: "z-older",
+          claimRevision: 10,
+          serverRevision: 50,
+          action: { name: "render", params: { phase: "older" } },
+        }),
+        candidate({
+          bindingId: "a-newer",
+          claimRevision: 11,
+          serverRevision: 50,
+          action: { name: "render", params: { phase: "newer" } },
+        }),
+      ],
+      51,
+    );
+    expect(result[0]?.action?.params).toEqual({ phase: "newer" });
+  });
+
   it("honors acknowledgements only when the binding requests it", () => {
     const result = arbitrate(
       [candidate({ bindingId: "acked", urgency: "critical", acknowledged: true, honorAcknowledgement: true })],

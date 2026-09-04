@@ -174,6 +174,7 @@ export function arbitrate(candidates: readonly ActionCandidate[], projectionRevi
         (a, b) =>
           (urgencyRank[b.urgency] ?? 0) - (urgencyRank[a.urgency] ?? 0) ||
           b.bindingOrder - a.bindingOrder ||
+          (b.claimRevision ?? -1) - (a.claimRevision ?? -1) ||
           b.serverRevision - a.serverRevision ||
           b.bindingId.localeCompare(a.bindingId),
       );

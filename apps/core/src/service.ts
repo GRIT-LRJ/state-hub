@@ -84,6 +84,14 @@ export interface RuntimeSnapshot {
   deadLetters: number;
 }
 
+export interface PendingClaimExpiration {
+  producerId: string;
+  scopeId: string;
+  signalId: string;
+  claimRevision: number;
+  expiresAt: string;
+}
+
 export interface PublishedConfig {
   bindings: Binding[];
   driverInstances: Array<{
@@ -190,6 +198,77 @@ export class StateHubService {
     );
   }
 
+  listPendingClaimExpirations(): PendingClaimExpiration[] {
+    const rows = this.db.raw
+      .prepare(
+        `SELECT c.producer_id, c.scope_id, c.signal_id, c.revision, c.expires_at
+         FROM claims c
+         LEFT JOIN claim_expirations e
+           ON e.producer_id = c.producer_id
+          AND e.scope_id = c.scope_id
+          AND e.signal_id = c.signal_id
+          AND e.claim_revision = c.revision
+         WHERE c.expires_at IS NOT NULL AND e.claim_revision IS NULL`,
+      )
+      .all() as Array<{
+        producer_id: string;
+        scope_id: string;
+        signal_id: string;
+        revision: number;
+        expires_at: string;
+      }>;
+    return rows.map((row) => ({
+      producerId: row.producer_id,
+      scopeId: row.scope_id,
+      signalId: row.signal_id,
+      claimRevision: row.revision,
+      expiresAt: row.expires_at,
+    }));
+  }
+
+  processDueClaimExpirations(now = new Date()): number {
+    const due = this.listPendingClaimExpirations().filter(
+      (expiration) => Date.parse(expiration.expiresAt) <= now.getTime(),
+    );
+    if (due.length === 0) return 0;
+    const nowIso = now.toISOString();
+    let revision = 0;
+    this.db.transaction(() => {
+      revision = this.db.nextRevision();
+      for (const expiration of due) {
+        this.db.raw
+          .prepare(
+            `INSERT OR IGNORE INTO claim_expirations(
+               producer_id, scope_id, signal_id, claim_revision, expires_at, applied_at
+             ) VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            expiration.producerId,
+            expiration.scopeId,
+            expiration.signalId,
+            expiration.claimRevision,
+            expiration.expiresAt,
+            nowIso,
+          );
+      }
+      this.recomputeStateful(undefined, revision, nowIso);
+      this.appendHistory(
+        "claims.expired",
+        null,
+        {
+          revision,
+          claims: due.map((expiration) =>
+            claimKey(expiration.producerId, expiration.scopeId, expiration.signalId),
+          ),
+        },
+        nowIso,
+      );
+    });
+    this.events.publish("claims.expired", { revision, claims: due });
+    this.events.publish("snapshot.changed", this.snapshot());
+    return due.length;
+  }
+
   snapshot(): RuntimeSnapshot {
     const pending = this.db.raw
       .prepare("SELECT count(*) AS count FROM deliveries WHERE status IN ('pending', 'leased')")
@@ -244,6 +323,9 @@ export class StateHubService {
       },
       (commandId, revision, now) => {
         this.touchScope(producerId, scopeId, input.sourceType, now);
+        this.db.raw
+          .prepare("DELETE FROM claim_expirations WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
+          .run(producerId, scopeId, signalId);
         this.db.raw
           .prepare(
             `INSERT INTO claims(
@@ -301,6 +383,9 @@ export class StateHubService {
         const key = claimKey(producerId, scopeId, signalId);
         this.db.raw
           .prepare("DELETE FROM claims WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
+          .run(producerId, scopeId, signalId);
+        this.db.raw
+          .prepare("DELETE FROM claim_expirations WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
           .run(producerId, scopeId, signalId);
         this.db.raw.prepare("DELETE FROM binding_transitions WHERE input_key = ?").run(key);
         this.recomputeStateful(commandId, revision, now);
@@ -389,6 +474,7 @@ export class StateHubService {
       },
       (commandId, revision, now) => {
         this.db.raw.prepare("DELETE FROM claims WHERE producer_id = ?").run(producerId);
+        this.db.raw.prepare("DELETE FROM claim_expirations WHERE producer_id = ?").run(producerId);
         this.db.raw
           .prepare("DELETE FROM binding_transitions WHERE input_key LIKE ?")
           .run(`${producerId}\u001f%`);
@@ -696,7 +782,7 @@ export class StateHubService {
             .prepare("SELECT 1 FROM acknowledgements WHERE claim_key = ? AND claim_revision = ?")
             .get(key, claim.revision),
         );
-        const candidate = candidateFromClaim(binding, claim, claim.revision, acknowledged, new Date(now));
+        const candidate = candidateFromClaim(binding, claim, revision, acknowledged, new Date(now));
         if (candidate) candidates.push(candidate);
       }
     }

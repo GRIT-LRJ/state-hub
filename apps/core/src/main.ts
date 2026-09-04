@@ -8,6 +8,7 @@ import { DriverRegistry } from "./drivers.js";
 import { HubEventBus } from "./events.js";
 import { createServer } from "./server.js";
 import { StateHubService } from "./service.js";
+import { ClaimTtlScheduler } from "./ttl-scheduler.js";
 
 const config = loadConfig();
 mkdirSync(config.dataDir, { recursive: true });
@@ -32,6 +33,7 @@ if (instanceCount.count === 0) {
 
 const drivers = new DriverRegistry(db, events);
 const dispatcher = new DeliveryDispatcher(db, drivers, events);
+const ttlScheduler = new ClaimTtlScheduler(service, events);
 const app = createServer({ service, events, drivers, adminToken: config.adminToken });
 const address = await app.listen({ host: config.host, port: config.port });
 const port = Number.parseInt(new URL(address).port, 10);
@@ -53,6 +55,7 @@ try {
   // Windows ACL inheritance provides the current-user boundary; POSIX uses chmod above.
 }
 
+ttlScheduler.start();
 dispatcher.start();
 const cleanupTimer = setInterval(() => service.cleanupHistory(), 60 * 60 * 1000);
 cleanupTimer.unref();
@@ -63,6 +66,7 @@ const stop = async (): Promise<void> => {
   if (stopping) return;
   stopping = true;
   clearInterval(cleanupTimer);
+  ttlScheduler.stop();
   dispatcher.stop();
   drivers.invalidate();
   await app.close();
