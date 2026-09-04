@@ -7,11 +7,12 @@ import { StateHubService } from "./service.js";
 
 let db: StateHubDatabase;
 let service: StateHubService;
+const producerToken = "load-test-token-with-high-entropy";
 
 beforeAll(() => {
   db = new StateHubDatabase(":memory:");
   service = new StateHubService(db, new HubEventBus());
-  registerProducer(db, "load", "load-test-token-with-high-entropy");
+  registerProducer(db, "load", producerToken);
 });
 
 afterAll(() => db.close());
@@ -20,7 +21,7 @@ it("accepts a 1000-event burst with command commit P95 below 100ms", () => {
   const durations: number[] = [];
   for (let index = 0; index < 1_000; index += 1) {
     const started = performance.now();
-    service.emitEvent("load", {
+    service.emitEvent("load", producerToken, {
       eventId: `burst-${index}`,
       type: "load.sample",
       scopeId: `scope-${index % 50}`,

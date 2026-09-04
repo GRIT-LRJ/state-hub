@@ -3,8 +3,8 @@ import { randomBytes } from "node:crypto";
 import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { AcceptedCommand, CommandResult, StateClaimInput } from "@state-hub/protocol";
-import type { PublishedConfig, RuntimeSnapshot } from "../service.js";
+import type { AcceptedCommand, CommandResult, OccurrenceEventInput, StateClaimInput } from "@state-hub/protocol";
+import type { PublishedConfig, RuntimeSnapshot, SnapshotClaim } from "../service.js";
 
 interface Discovery {
   schemaVersion: 1;
@@ -133,22 +133,66 @@ export class ProducerClient {
     scopeId: string,
     signalId: string,
     input: StateClaimInput,
+    idempotencyKey?: string,
   ): Promise<{ response: Response; body: AcceptedCommand }> {
-    const response = await this.request(
+    const response = await this.fetch(
       `/api/v1/producers/${encodeURIComponent(this.producerId)}/scopes/${encodeURIComponent(scopeId)}/claims/${encodeURIComponent(signalId)}`,
-      { method: "PUT", body: JSON.stringify(input) },
+      {
+        method: "PUT",
+        body: JSON.stringify(input),
+        ...(idempotencyKey ? { headers: { "idempotency-key": idempotencyKey } } : {}),
+      },
     );
     return { response, body: await responseJson<AcceptedCommand>(response.clone()) };
   }
 
+  async clearClaim(
+    scopeId: string,
+    signalId: string,
+    idempotencyKey?: string,
+  ): Promise<{ response: Response; body: AcceptedCommand }> {
+    const response = await this.fetch(
+      `/api/v1/producers/${encodeURIComponent(this.producerId)}/scopes/${encodeURIComponent(scopeId)}/claims/${encodeURIComponent(signalId)}:clear`,
+      {
+        method: "POST",
+        ...(idempotencyKey ? { headers: { "idempotency-key": idempotencyKey } } : {}),
+      },
+    );
+    return { response, body: await responseJson<AcceptedCommand>(response.clone()) };
+  }
+
+  async emitEvent(
+    input: OccurrenceEventInput,
+    idempotencyKey?: string,
+  ): Promise<{ response: Response; body: AcceptedCommand }> {
+    const response = await this.fetch(`/api/v1/producers/${encodeURIComponent(this.producerId)}/events`, {
+      method: "POST",
+      body: JSON.stringify(input),
+      ...(idempotencyKey ? { headers: { "idempotency-key": idempotencyKey } } : {}),
+    });
+    return { response, body: await responseJson<AcceptedCommand>(response.clone()) };
+  }
+
+  async replaceSnapshot(
+    claims: SnapshotClaim[],
+    idempotencyKey?: string,
+  ): Promise<{ response: Response; body: AcceptedCommand }> {
+    const response = await this.fetch(`/api/v1/producers/${encodeURIComponent(this.producerId)}/snapshot`, {
+      method: "PUT",
+      body: JSON.stringify({ claims }),
+      ...(idempotencyKey ? { headers: { "idempotency-key": idempotencyKey } } : {}),
+    });
+    return { response, body: await responseJson<AcceptedCommand>(response.clone()) };
+  }
+
   async command(commandId: string): Promise<CommandResult> {
-    const response = await this.request(
+    const response = await this.fetch(
       `/api/v1/producers/${encodeURIComponent(this.producerId)}/commands/${encodeURIComponent(commandId)}`,
     );
     return await responseJson<CommandResult>(response);
   }
 
-  private async request(path: string, init: RequestInit = {}): Promise<Response> {
+  async fetch(path: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${this.token}`);
     if (init.body) headers.set("content-type", "application/json");

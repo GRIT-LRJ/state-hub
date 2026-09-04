@@ -38,27 +38,32 @@ export function createServer(options: ServerOptions): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: 1_048_576, trustProxy: false });
   const rate = new Map<string, { window: number; count: number }>();
 
-  const producerAuth = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  const producerPolicy = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     if (request.headers.origin) {
       await reply.code(403).send({ error: { code: "BROWSER_ORIGIN_FORBIDDEN", message: "Producer API is not a browser API" } });
       return;
     }
-    const token = bearerToken(request);
     const producerId = producerIdFrom(request);
-    if (!token || !authenticateProducer(options.service.db, producerId, token)) {
-      await reply.code(401).send({ error: { code: "UNAUTHORIZED_PRODUCER", message: "Invalid producer token" } });
-      return;
-    }
     const key = `${producerId}:${Math.floor(Date.now() / 1_000)}`;
     const bucket = rate.get(key) ?? { window: Date.now(), count: 0 };
     bucket.count += 1;
     rate.set(key, bucket);
     if (bucket.count > 250) {
       await reply.code(429).send({ error: { code: "RATE_LIMITED", message: "Producer rate limit exceeded" } });
+      return;
     }
     if (rate.size > 1_000) {
       const cutoff = Date.now() - 5_000;
       for (const [bucketKey, value] of rate) if (value.window < cutoff) rate.delete(bucketKey);
+    }
+  };
+
+  const producerReadAuth = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    await producerPolicy(request, reply);
+    if (reply.sent) return;
+    const token = bearerToken(request);
+    if (!token || !authenticateProducer(options.service.db, producerIdFrom(request), token)) {
+      await reply.code(401).send({ error: { code: "UNAUTHORIZED_PRODUCER", message: "Invalid producer token" } });
     }
   };
 
@@ -92,11 +97,12 @@ export function createServer(options: ServerOptions): FastifyInstance {
 
   app.put(
     "/api/v1/producers/:producerId/scopes/:scopeId/claims/:signalId",
-    { preHandler: producerAuth, schema: { params: idParamsSchema, body: claimInputSchema } },
+    { preHandler: producerPolicy, schema: { params: idParamsSchema, body: claimInputSchema } },
     async (request, reply) => {
       const params = request.params as { producerId: string; scopeId: string; signalId: string };
       const result = options.service.upsertClaim(
         params.producerId,
+        bearerToken(request),
         params.scopeId,
         params.signalId,
         request.body as StateClaimInput,
@@ -107,13 +113,14 @@ export function createServer(options: ServerOptions): FastifyInstance {
   );
 
   app.post(
-    "/api/v1/producers/:producerId/scopes/:scopeId/claims/:signalId:clear",
-    { preHandler: producerAuth, schema: { params: idParamsSchema } },
+    "/api/v1/producers/:producerId/scopes/:scopeId/claims/:signalId(^.+)::clear",
+    { preHandler: producerPolicy, schema: { params: idParamsSchema } },
     async (request, reply) => {
       const params = request.params as { producerId: string; scopeId: string; signalId: string };
       return await reply.code(202).send(
         options.service.clearClaim(
           params.producerId,
+          bearerToken(request),
           params.scopeId,
           params.signalId,
           request.headers["idempotency-key"] as string | undefined,
@@ -125,7 +132,7 @@ export function createServer(options: ServerOptions): FastifyInstance {
   app.post(
     "/api/v1/producers/:producerId/events",
     {
-      preHandler: producerAuth,
+      preHandler: producerPolicy,
       schema: {
         params: {
           type: "object",
@@ -140,6 +147,7 @@ export function createServer(options: ServerOptions): FastifyInstance {
       return await reply.code(202).send(
         options.service.emitEvent(
           producerId,
+          bearerToken(request),
           request.body as OccurrenceEventInput,
           request.headers["idempotency-key"] as string | undefined,
         ),
@@ -150,7 +158,7 @@ export function createServer(options: ServerOptions): FastifyInstance {
   app.put(
     "/api/v1/producers/:producerId/snapshot",
     {
-      preHandler: producerAuth,
+      preHandler: producerPolicy,
       schema: {
         params: {
           type: "object",
@@ -184,6 +192,7 @@ export function createServer(options: ServerOptions): FastifyInstance {
       return await reply.code(202).send(
         options.service.replaceSnapshot(
           producerIdFrom(request),
+          bearerToken(request),
           body.claims,
           request.headers["idempotency-key"] as string | undefined,
         ),
@@ -193,7 +202,7 @@ export function createServer(options: ServerOptions): FastifyInstance {
 
   app.get(
     "/api/v1/producers/:producerId/commands/:commandId",
-    { preHandler: producerAuth },
+    { preHandler: producerReadAuth },
     async (request, reply) => {
       const params = request.params as { producerId: string; commandId: string };
       const result = options.service.getCommand(params.producerId, params.commandId);

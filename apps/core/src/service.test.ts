@@ -69,7 +69,7 @@ describe("StateHub vertical slice", () => {
   });
 
   it("commits command, claim, projection and outbox before acceptance", async () => {
-    const accepted = service.upsertClaim("codex", "session-1", "status", {
+    const accepted = service.upsertClaim("codex", producerToken, "session-1", "status", {
       value: { phase: "decision", color: "#ffaa00" },
       urgency: "action-required",
     });
@@ -83,8 +83,8 @@ describe("StateHub vertical slice", () => {
 
   it("does not repeat a transition-only claim effect for an identical value", () => {
     const value = { phase: "decision", color: "#ffaa00" };
-    service.upsertClaim("codex", "session-1", "status", { value });
-    service.upsertClaim("codex", "session-1", "status", { value });
+    service.upsertClaim("codex", producerToken, "session-1", "status", { value });
+    service.upsertClaim("codex", producerToken, "session-1", "status", { value });
     const rows = db.raw
       .prepare("SELECT action_kind, count(*) AS count FROM deliveries GROUP BY action_kind ORDER BY action_kind")
       .all() as Array<{ action_kind: string; count: number }>;
@@ -94,7 +94,9 @@ describe("StateHub vertical slice", () => {
 
   it("keeps input current while paused and suppresses effects", () => {
     service.setPaused(true);
-    service.upsertClaim("codex", "session-1", "status", { value: { phase: "completed", color: "green" } });
+    service.upsertClaim("codex", producerToken, "session-1", "status", {
+      value: { phase: "completed", color: "green" },
+    });
     expect(service.snapshot().claims[0]?.value).toEqual({ phase: "completed", color: "green" });
     expect(service.snapshot().projections[0]?.action).toBeNull();
     const effects = db.raw.prepare("SELECT count(*) AS count FROM deliveries WHERE action_kind = 'append-only'").get() as {
@@ -123,31 +125,35 @@ describe("StateHub vertical slice", () => {
   });
 
   it("arbitrates different Codex session states on one physical output", () => {
-    service.upsertClaim("codex", "session-working", "status", {
+    service.upsertClaim("codex", producerToken, "session-working", "status", {
       value: { phase: "working", color: "blue" },
       urgency: "ambient",
     });
-    service.upsertClaim("codex", "session-decision", "status", {
+    service.upsertClaim("codex", producerToken, "session-decision", "status", {
       value: { phase: "decision", color: "amber" },
       urgency: "action-required",
     });
     expect(service.snapshot().projections[0]?.action?.params).toEqual({ color: "amber" });
-    service.clearClaim("codex", "session-decision", "status");
+    service.clearClaim("codex", producerToken, "session-decision", "status");
     expect(service.snapshot().projections[0]?.action?.params).toEqual({ color: "blue" });
   });
 
   it("validates values for producers tied to a SourceDefinition", () => {
     registerProducer(db, "typed-codex", "another-secure-producer-token", "official.codex");
     expect(() =>
-      service.upsertClaim("typed-codex", "session-1", "status", { value: { phase: "invented" } }),
+      service.upsertClaim("typed-codex", "another-secure-producer-token", "session-1", "status", {
+        value: { phase: "invented" },
+      }),
     ).toThrow(/must be equal to one of the allowed values/u);
     expect(() =>
-      service.upsertClaim("typed-codex", "session-1", "status", { value: { phase: "working" } }),
+      service.upsertClaim("typed-codex", "another-secure-producer-token", "session-1", "status", {
+        value: { phase: "working" },
+      }),
     ).not.toThrow();
   });
 
   it("exports a support bundle without claim values or credential material", () => {
-    service.upsertClaim("codex", "session-secret", "status", {
+    service.upsertClaim("codex", producerToken, "session-secret", "status", {
       value: { phase: "working", prompt: "private prompt" },
     });
     const serialized = JSON.stringify(service.diagnosticBundle());

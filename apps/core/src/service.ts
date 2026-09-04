@@ -25,6 +25,7 @@ import {
 } from "@state-hub/domain";
 import type { StateHubDatabase } from "./database.js";
 import type { HubEventBus } from "./events.js";
+import { authenticateProducer } from "./auth.js";
 import { validateClaimValue, validateEventValue } from "./schema-validation.js";
 
 interface ClaimRow {
@@ -225,64 +226,77 @@ export class StateHubService {
 
   upsertClaim(
     producerId: string,
+    producerToken: string | undefined,
     scopeId: string,
     signalId: string,
     input: StateClaimInput,
     idempotencyKey?: string,
   ): AcceptedCommand {
-    const validationError = validateClaimValue(this.db, producerId, signalId, input.value);
-    if (validationError) throw new HubError("SOURCE_SCHEMA_VIOLATION", validationError, 422);
-    return this.executeCommand(producerId, "claim.upsert", idempotencyKey, input, (commandId, revision, now) => {
-      this.touchScope(producerId, scopeId, input.sourceType, now);
-      this.db.raw
-        .prepare(
-          `INSERT INTO claims(
-             producer_id, scope_id, signal_id, source_type, value_json, urgency, expires_at,
-             stale_policy, observed_at, metadata_json, revision, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(producer_id, scope_id, signal_id) DO UPDATE SET
-             source_type = excluded.source_type, value_json = excluded.value_json,
-             urgency = excluded.urgency, expires_at = excluded.expires_at,
-             stale_policy = excluded.stale_policy, observed_at = excluded.observed_at,
-             metadata_json = excluded.metadata_json, revision = excluded.revision,
-             updated_at = excluded.updated_at`,
-        )
-        .run(
-          producerId,
-          scopeId,
-          signalId,
-          input.sourceType ?? null,
-          JSON.stringify(input.value),
-          input.urgency ?? "ambient",
-          input.expiresAt ?? null,
-          input.stalePolicy ?? "deactivate",
-          input.observedAt ?? null,
-          input.metadata ? JSON.stringify(input.metadata) : null,
-          revision,
-          now,
-        );
-      const claim = decodeClaim(
+    return this.executeCommand(
+      producerId,
+      producerToken,
+      "claim.upsert",
+      idempotencyKey,
+      { scopeId, signalId, input },
+      () => {
+        const validationError = validateClaimValue(this.db, producerId, signalId, input.value);
+        if (validationError) throw new HubError("SOURCE_SCHEMA_VIOLATION", validationError, 422);
+      },
+      (commandId, revision, now) => {
+        this.touchScope(producerId, scopeId, input.sourceType, now);
         this.db.raw
-          .prepare("SELECT * FROM claims WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
-          .get(producerId, scopeId, signalId) as ClaimRow,
-      );
-      this.enqueueClaimEffects(commandId, claim, now);
-      this.recomputeStateful(commandId, revision, now);
-      this.appendHistory("claim.upsert", claimKey(producerId, scopeId, signalId), { revision }, now);
-    });
+          .prepare(
+            `INSERT INTO claims(
+               producer_id, scope_id, signal_id, source_type, value_json, urgency, expires_at,
+               stale_policy, observed_at, metadata_json, revision, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(producer_id, scope_id, signal_id) DO UPDATE SET
+               source_type = excluded.source_type, value_json = excluded.value_json,
+               urgency = excluded.urgency, expires_at = excluded.expires_at,
+               stale_policy = excluded.stale_policy, observed_at = excluded.observed_at,
+               metadata_json = excluded.metadata_json, revision = excluded.revision,
+               updated_at = excluded.updated_at`,
+          )
+          .run(
+            producerId,
+            scopeId,
+            signalId,
+            input.sourceType ?? null,
+            JSON.stringify(input.value),
+            input.urgency ?? "ambient",
+            input.expiresAt ?? null,
+            input.stalePolicy ?? "deactivate",
+            input.observedAt ?? null,
+            input.metadata ? JSON.stringify(input.metadata) : null,
+            revision,
+            now,
+          );
+        const claim = decodeClaim(
+          this.db.raw
+            .prepare("SELECT * FROM claims WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
+            .get(producerId, scopeId, signalId) as ClaimRow,
+        );
+        this.enqueueClaimEffects(commandId, claim, now);
+        this.recomputeStateful(commandId, revision, now);
+        this.appendHistory("claim.upsert", claimKey(producerId, scopeId, signalId), { revision }, now);
+      },
+    );
   }
 
   clearClaim(
     producerId: string,
+    producerToken: string | undefined,
     scopeId: string,
     signalId: string,
     idempotencyKey?: string,
   ): AcceptedCommand {
     return this.executeCommand(
       producerId,
+      producerToken,
       "claim.clear",
       idempotencyKey,
       { scopeId, signalId },
+      undefined,
       (commandId, revision, now) => {
         const key = claimKey(producerId, scopeId, signalId);
         this.db.raw
@@ -297,95 +311,115 @@ export class StateHubService {
 
   emitEvent(
     producerId: string,
+    producerToken: string | undefined,
     input: OccurrenceEventInput,
     idempotencyKey?: string,
   ): AcceptedCommand {
-    const validationError = validateEventValue(this.db, producerId, input.type, input.value);
-    if (validationError) throw new HubError("SOURCE_SCHEMA_VIOLATION", validationError, 422);
-    return this.executeCommand(producerId, "event.emit", idempotencyKey ?? input.eventId, input, (commandId, revision, now) => {
-      const duplicate = this.db.raw
-        .prepare("SELECT 1 FROM occurrence_events WHERE producer_id = ? AND event_id = ?")
-        .get(producerId, input.eventId);
-      if (duplicate) return;
-      const scopeId = input.scopeId ?? "default";
-      this.touchScope(producerId, scopeId, input.sourceType, now);
-      this.db.raw
-        .prepare(
-          `INSERT INTO occurrence_events(
-             producer_id, event_id, type, scope_id, source_type, value_json, urgency,
-             occurred_at, metadata_json, revision, accepted_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          producerId,
-          input.eventId,
-          input.type,
-          scopeId,
-          input.sourceType ?? null,
-          input.value === undefined ? null : JSON.stringify(input.value),
-          input.urgency ?? "ambient",
-          input.occurredAt ?? null,
-          input.metadata ? JSON.stringify(input.metadata) : null,
-          revision,
-          now,
-        );
-      const event: OccurrenceEvent = {
-        ...input,
-        producerId,
-        scopeId,
-        revision,
-        acceptedAt: now,
-      };
-      this.enqueueOccurrence(commandId, event, now);
-      this.appendHistory("event.emit", input.eventId, { type: input.type, revision }, now);
-    });
-  }
-
-  replaceSnapshot(
-    producerId: string,
-    claims: SnapshotClaim[],
-    idempotencyKey?: string,
-  ): AcceptedCommand {
-    const identities = new Set<string>();
-    for (const claim of claims) {
-      const identity = `${claim.scopeId}\u001f${claim.signalId}`;
-      if (identities.has(identity)) throw new HubError("DUPLICATE_SNAPSHOT_CLAIM", identity);
-      identities.add(identity);
-      const validationError = validateClaimValue(this.db, producerId, claim.signalId, claim.value);
-      if (validationError) throw new HubError("SOURCE_SCHEMA_VIOLATION", validationError, 422);
-    }
-    return this.executeCommand(producerId, "snapshot.replace", idempotencyKey, claims, (commandId, revision, now) => {
-      this.db.raw.prepare("DELETE FROM claims WHERE producer_id = ?").run(producerId);
-      this.db.raw
-        .prepare("DELETE FROM binding_transitions WHERE input_key LIKE ?")
-        .run(`${producerId}\u001f%`);
-      for (const input of claims) {
-        this.touchScope(producerId, input.scopeId, input.sourceType, now);
+    return this.executeCommand(
+      producerId,
+      producerToken,
+      "event.emit",
+      idempotencyKey ?? input.eventId,
+      input,
+      () => {
+        const validationError = validateEventValue(this.db, producerId, input.type, input.value);
+        if (validationError) throw new HubError("SOURCE_SCHEMA_VIOLATION", validationError, 422);
+      },
+      (commandId, revision, now) => {
+        const duplicate = this.db.raw
+          .prepare("SELECT 1 FROM occurrence_events WHERE producer_id = ? AND event_id = ?")
+          .get(producerId, input.eventId);
+        if (duplicate) return;
+        const scopeId = input.scopeId ?? "default";
+        this.touchScope(producerId, scopeId, input.sourceType, now);
         this.db.raw
           .prepare(
-            `INSERT INTO claims(
-               producer_id, scope_id, signal_id, source_type, value_json, urgency, expires_at,
-               stale_policy, observed_at, metadata_json, revision, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO occurrence_events(
+               producer_id, event_id, type, scope_id, source_type, value_json, urgency,
+               occurred_at, metadata_json, revision, accepted_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             producerId,
-            input.scopeId,
-            input.signalId,
+            input.eventId,
+            input.type,
+            scopeId,
             input.sourceType ?? null,
-            JSON.stringify(input.value),
+            input.value === undefined ? null : JSON.stringify(input.value),
             input.urgency ?? "ambient",
-            input.expiresAt ?? null,
-            input.stalePolicy ?? "deactivate",
-            input.observedAt ?? null,
+            input.occurredAt ?? null,
             input.metadata ? JSON.stringify(input.metadata) : null,
             revision,
             now,
           );
-      }
-      this.recomputeStateful(commandId, revision, now);
-      this.appendHistory("snapshot.replace", producerId, { claimCount: claims.length, revision }, now);
-    });
+        const event: OccurrenceEvent = {
+          ...input,
+          producerId,
+          scopeId,
+          revision,
+          acceptedAt: now,
+        };
+        this.enqueueOccurrence(commandId, event, now);
+        this.appendHistory("event.emit", input.eventId, { type: input.type, revision }, now);
+      },
+    );
+  }
+
+  replaceSnapshot(
+    producerId: string,
+    producerToken: string | undefined,
+    claims: SnapshotClaim[],
+    idempotencyKey?: string,
+  ): AcceptedCommand {
+    return this.executeCommand(
+      producerId,
+      producerToken,
+      "snapshot.replace",
+      idempotencyKey,
+      claims,
+      () => {
+        const identities = new Set<string>();
+        for (const claim of claims) {
+          const identity = `${claim.scopeId}\u001f${claim.signalId}`;
+          if (identities.has(identity)) throw new HubError("DUPLICATE_SNAPSHOT_CLAIM", identity);
+          identities.add(identity);
+          const validationError = validateClaimValue(this.db, producerId, claim.signalId, claim.value);
+          if (validationError) throw new HubError("SOURCE_SCHEMA_VIOLATION", validationError, 422);
+        }
+      },
+      (commandId, revision, now) => {
+        this.db.raw.prepare("DELETE FROM claims WHERE producer_id = ?").run(producerId);
+        this.db.raw
+          .prepare("DELETE FROM binding_transitions WHERE input_key LIKE ?")
+          .run(`${producerId}\u001f%`);
+        for (const input of claims) {
+          this.touchScope(producerId, input.scopeId, input.sourceType, now);
+          this.db.raw
+            .prepare(
+              `INSERT INTO claims(
+                 producer_id, scope_id, signal_id, source_type, value_json, urgency, expires_at,
+                 stale_policy, observed_at, metadata_json, revision, updated_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              producerId,
+              input.scopeId,
+              input.signalId,
+              input.sourceType ?? null,
+              JSON.stringify(input.value),
+              input.urgency ?? "ambient",
+              input.expiresAt ?? null,
+              input.stalePolicy ?? "deactivate",
+              input.observedAt ?? null,
+              input.metadata ? JSON.stringify(input.metadata) : null,
+              revision,
+              now,
+            );
+        }
+        this.recomputeStateful(commandId, revision, now);
+        this.appendHistory("snapshot.replace", producerId, { claimCount: claims.length, revision }, now);
+      },
+    );
   }
 
   acknowledge(producerId: string, scopeId: string, signalId: string, claimRevision: number): void {
@@ -583,13 +617,19 @@ export class StateHubService {
 
   private executeCommand(
     producerId: string,
+    producerToken: string | undefined,
     kind: CommandKind,
     idempotencyKey: string | undefined,
     request: unknown,
+    validate: (() => void) | undefined,
     work: (commandId: string, revision: number, now: string) => void,
   ): AcceptedCommand {
-    const requestHash = createHash("sha256").update(stableStringify(request)).digest("hex");
+    const requestHash = createHash("sha256").update(stableStringify({ kind, request })).digest("hex");
     const accepted = this.db.transaction(() => {
+      if (!producerToken || !authenticateProducer(this.db, producerId, producerToken)) {
+        throw new HubError("UNAUTHORIZED_PRODUCER", "Invalid producer token", 401);
+      }
+      validate?.();
       if (idempotencyKey) {
         const existing = this.db.raw
           .prepare("SELECT * FROM commands WHERE producer_id = ? AND idempotency_key = ?")
