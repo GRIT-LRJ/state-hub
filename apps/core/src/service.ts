@@ -652,6 +652,7 @@ export class StateHubService {
         { name: "runtime-summary.json", containsSecrets: false },
         { name: "config-redacted.json", containsSecrets: false },
         { name: "recent-history.json", containsSecrets: false },
+        { name: "delivery-diagnostics.json", containsSecrets: false },
       ],
       redaction: ["claim values", "token/secret/password/authorization/cookie/credential fields", "producer token hashes"],
     };
@@ -662,6 +663,13 @@ export class StateHubService {
     const recentHistory = this.db.raw
       .prepare("SELECT kind, subject_id, payload_json, created_at FROM history ORDER BY id DESC LIMIT 500")
       .all() as Array<{ kind: string; subject_id: string | null; payload_json: string; created_at: string }>;
+    const deliveries = this.db.raw
+      .prepare(
+        `SELECT id, command_id, producer_id, event_id, event_revision, batch_id, driver_instance_id, resource_channel,
+                action_kind, status, attempt_count, deadline_at, last_error, created_at, completed_at
+         FROM deliveries ORDER BY created_at DESC, id DESC LIMIT 500`,
+      )
+      .all() as Array<Record<string, unknown>>;
     return {
       schemaVersion: 1,
       generatedAt: new Date().toISOString(),
@@ -679,6 +687,23 @@ export class StateHubService {
         subjectId: row.subject_id,
         payload: redactDiagnostic(JSON.parse(row.payload_json) as unknown),
         createdAt: row.created_at,
+      })),
+      deliveries: deliveries.map((delivery) => ({
+        deliveryId: delivery.id,
+        commandId: delivery.command_id,
+        producerId: delivery.producer_id,
+        eventId: delivery.event_id,
+        eventRevision: delivery.event_revision,
+        batchId: delivery.batch_id,
+        driverInstanceId: delivery.driver_instance_id,
+        resourceChannel: delivery.resource_channel,
+        actionKind: delivery.action_kind,
+        status: delivery.status,
+        attemptCount: delivery.attempt_count,
+        deadlineAt: delivery.deadline_at,
+        lastError: delivery.last_error,
+        createdAt: delivery.created_at,
+        completedAt: delivery.completed_at,
       })),
       claims: snapshot.claims.map((claim) => ({
         producerId: claim.producerId,
@@ -896,13 +921,29 @@ export class StateHubService {
         this.appendHistory("delivery.suppressed", binding.id, { reason: "outputs-paused" }, now);
         continue;
       }
+      const action = buildAction(binding, event.value);
+      const batchWindowMs = binding.target.actionKind === "append-only" ? binding.batchWindowMs ?? 0 : 0;
+      const deliveryDelayMs = binding.target.actionKind === "append-only" ? 0 : binding.batchWindowMs ?? 0;
       this.enqueueDelivery(
         commandId,
         binding.target.driverInstanceId,
         binding.target.resourceChannel,
         binding.target.actionKind,
-        buildAction(binding, event.value),
-        plusMilliseconds(now, binding.batchWindowMs ?? 0),
+        action,
+        now,
+        undefined,
+        {
+          eventId: event.eventId,
+          producerId: event.producerId,
+          eventRevision: event.revision,
+          ...(deliveryDelayMs > 0 ? { delayMs: deliveryDelayMs } : {}),
+          ...(batchWindowMs > 0
+            ? {
+                batchKey: `${binding.id}\u001f${action.name}`,
+                batchWindowMs,
+              }
+            : {}),
+        },
       );
     }
   }
@@ -913,33 +954,64 @@ export class StateHubService {
     channel: string,
     kind: ActionKind,
     action: Projection["action"],
-    availableAt: string,
+    createdAt: string,
     projectionRevision?: number,
+    options: {
+      producerId?: string;
+      eventId?: string;
+      eventRevision?: number;
+      batchKey?: string;
+      batchWindowMs?: number;
+      delayMs?: number;
+    } = {},
   ): void {
+    let batchId: string | undefined;
+    let availableAt = plusMilliseconds(createdAt, options.delayMs ?? 0);
+    if (kind === "append-only" && options.batchKey && options.batchWindowMs && options.batchWindowMs > 0) {
+      const openBatch = this.db.raw
+        .prepare(
+          `SELECT batch_id, available_at FROM deliveries
+           WHERE batch_key = ? AND driver_instance_id = ? AND resource_channel = ?
+             AND action_kind = 'append-only' AND status = 'pending' AND attempt_count = 0
+             AND available_at > ?
+           ORDER BY created_at, id LIMIT 1`,
+        )
+        .get(options.batchKey, driverInstanceId, channel, createdAt) as
+        | { batch_id: string; available_at: string }
+        | undefined;
+      batchId = openBatch?.batch_id ?? randomUUID();
+      availableAt = openBatch?.available_at ?? plusMilliseconds(createdAt, options.batchWindowMs);
+    }
     const deadlineAt =
       kind === "append-only"
-        ? plusMilliseconds(availableAt, 24 * 60 * 60 * 1000)
+        ? plusMilliseconds(createdAt, 24 * 60 * 60 * 1000)
         : kind === "queued-effect"
-          ? plusMilliseconds(availableAt, 30_000)
+          ? plusMilliseconds(createdAt, 30_000)
           : null;
     this.db.raw
       .prepare(
         `INSERT INTO deliveries(
-           id, command_id, driver_instance_id, resource_channel, action_kind, action_json,
-           projection_revision, status, available_at, deadline_at, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+           id, command_id, producer_id, event_id, event_revision,
+           driver_instance_id, resource_channel, action_kind, action_json,
+           projection_revision, batch_key, batch_id, status, available_at, deadline_at, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
       )
       .run(
         randomUUID(),
         commandId ?? null,
+        options.producerId ?? null,
+        options.eventId ?? null,
+        options.eventRevision ?? null,
         driverInstanceId,
         channel,
         kind,
         action ? JSON.stringify(action) : null,
         projectionRevision ?? null,
+        options.batchKey ?? null,
+        batchId ?? null,
         availableAt,
         deadlineAt,
-        new Date().toISOString(),
+        createdAt,
       );
   }
 
@@ -962,6 +1034,12 @@ export class StateHubService {
       bindingIds.add(binding.id);
       if (!instanceIds.has(binding.target.driverInstanceId)) {
         throw new HubError("UNKNOWN_DRIVER_INSTANCE", binding.target.driverInstanceId);
+      }
+      if (
+        binding.batchWindowMs !== undefined &&
+        (!Number.isSafeInteger(binding.batchWindowMs) || binding.batchWindowMs < 0)
+      ) {
+        throw new HubError("INVALID_BATCH_WINDOW", "batchWindowMs must be a non-negative safe integer");
       }
     }
   }

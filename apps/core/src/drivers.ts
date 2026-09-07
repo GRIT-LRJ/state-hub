@@ -52,12 +52,14 @@ export class VirtualDriver implements Driver {
       }
       this.#projectionRevisions.set(request.resourceChannel, request.projectionRevision);
     }
-    if (request.action) this.state.set(request.resourceChannel, request.action);
+    const effectiveAction = request.batch?.at(-1)?.action ?? request.action;
+    if (effectiveAction) this.state.set(request.resourceChannel, effectiveAction);
     else this.state.delete(request.resourceChannel);
     this.events.publish("virtual.rendered", {
       driverInstanceId: this.instanceId,
       resourceChannel: request.resourceChannel,
-      action: request.action,
+      action: effectiveAction,
+      ...(request.batch ? { batch: request.batch } : {}),
       ...(request.projectionRevision === undefined ? {} : { projectionRevision: request.projectionRevision }),
     });
     return { status: "delivered" };
@@ -170,9 +172,14 @@ export class GenericHttpDriver implements Driver {
     try {
       const response = await pinnedJsonRequest(this.config, {
         deliveryId: request.deliveryId,
+        ...(request.producerId ? { producerId: request.producerId } : {}),
+        ...(request.eventId ? { eventId: request.eventId } : {}),
+        ...(request.eventRevision === undefined ? {} : { eventRevision: request.eventRevision }),
         channel: request.resourceChannel,
         actionKind: request.actionKind,
         action: request.action,
+        ...(request.batchId ? { batchId: request.batchId } : {}),
+        ...(request.batch ? { batch: request.batch } : {}),
         ...(request.projectionRevision === undefined ? {} : { projectionRevision: request.projectionRevision }),
       });
       if (response.statusCode >= 200 && response.statusCode < 300) return { status: "delivered" };
@@ -201,7 +208,16 @@ export class PushPlusDriver implements Driver {
   async execute(request: DriverActionRequest): Promise<DriverActionResult> {
     const token = await this.secrets.get(this.config.tokenSecretRef);
     if (!token) return { status: "dead-letter", detail: "OS credential is unavailable; plaintext fallback is forbidden" };
-    const params = request.action?.params ?? {};
+    const items = request.batch ?? [{
+      deliveryId: request.deliveryId,
+      ...(request.producerId ? { producerId: request.producerId } : {}),
+      ...(request.eventId ? { eventId: request.eventId } : {}),
+      ...(request.eventRevision === undefined ? {} : { eventRevision: request.eventRevision }),
+      action: request.action,
+      ...(request.deadlineAt ? { deadlineAt: request.deadlineAt } : {}),
+    }];
+    const params = items[0]?.action?.params ?? {};
+    const contents = items.map((item) => String(item.action?.params.content ?? "")).filter(Boolean);
     try {
       const response = await pinnedJsonRequest(
         {
@@ -211,8 +227,10 @@ export class PushPlusDriver implements Driver {
         },
         {
           token,
-          title: String(params.title ?? "State Hub"),
-          content: String(params.content ?? ""),
+          title: items.length > 1
+            ? `${String(params.title ?? "State Hub")} (${items.length})`
+            : String(params.title ?? "State Hub"),
+          content: contents.join("\n\n"),
           ...(this.config.topic ? { topic: this.config.topic } : {}),
         },
       );

@@ -240,6 +240,12 @@ export class AdminClient {
     }));
   }
 
+  async diagnostics(): Promise<Record<string, unknown>> {
+    return await responseJson<Record<string, unknown>>(
+      await this.request("/api/v1/admin/diagnostics/export"),
+    );
+  }
+
   private async request(path: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${this.harness.adminToken}`);

@@ -154,11 +154,25 @@ export interface CommandResult {
 
 export interface DriverActionRequest {
   deliveryId: string;
+  producerId?: string;
+  eventId?: string;
+  eventRevision?: number;
   driverInstanceId: string;
   resourceChannel: string;
   actionKind: ActionKind;
   action: ActionPayload | null;
   projectionRevision?: number;
+  deadlineAt?: string;
+  batchId?: string;
+  batch?: DriverActionBatchItem[];
+}
+
+export interface DriverActionBatchItem {
+  deliveryId: string;
+  producerId?: string;
+  eventId?: string;
+  eventRevision?: number;
+  action: ActionPayload | null;
   deadlineAt?: string;
 }
 

@@ -1,0 +1,235 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  Binding,
+  DriverActionRequest,
+  DriverActionResult,
+  OccurrenceEventInput,
+} from "@state-hub/protocol";
+import { registerProducer } from "./auth.js";
+import { StateHubDatabase } from "./database.js";
+import { DeliveryDispatcher } from "./dispatcher.js";
+import type { Driver } from "./drivers.js";
+import { HubEventBus } from "./events.js";
+import { StateHubService } from "./service.js";
+
+class ProgrammableDriver implements Driver {
+  readonly requests: DriverActionRequest[] = [];
+
+  constructor(private readonly executeResult: (attempt: number) => DriverActionResult) {}
+
+  async execute(request: DriverActionRequest): Promise<DriverActionResult> {
+    this.requests.push(request);
+    return this.executeResult(this.requests.length);
+  }
+}
+
+function appendBinding(id: string, eventType: string): Binding {
+  return {
+    id,
+    name: id,
+    enabled: true,
+    selector: { producerId: "append-producer", eventType, scopePattern: "*" },
+    conditions: [],
+    mapping: { sequence: { kind: "pointer", pointer: "/sequence" } },
+    target: {
+      driverInstanceId: "append-driver",
+      resourceChannel: "audit",
+      actionKind: "append-only",
+      actionName: "append",
+    },
+    batchWindowMs: 100,
+  };
+}
+
+function insertAppendDelivery(
+  db: StateHubDatabase,
+  {
+    id = "delivery",
+    availableAt,
+    deadlineAt,
+  }: { id?: string; availableAt: string; deadlineAt: string },
+): void {
+  db.raw
+    .prepare(
+      `INSERT INTO deliveries(
+         id, command_id, event_id, driver_instance_id, resource_channel, action_kind,
+         action_json, projection_revision, batch_key, batch_id, status, attempt_count,
+         available_at, deadline_at, created_at
+       ) VALUES (?, NULL, ?, 'append-driver', 'audit', 'append-only', ?, NULL, NULL, NULL,
+                 'pending', 0, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      `event-${id}`,
+      JSON.stringify({ name: "append", params: { id } }),
+      availableAt,
+      deadlineAt,
+      availableAt,
+    );
+}
+
+describe("append-only dispatcher", () => {
+  let db: StateHubDatabase;
+  let events: HubEventBus;
+
+  beforeEach(() => {
+    db = new StateHubDatabase(":memory:");
+    events = new HubEventBus();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    db.close();
+  });
+
+  it("uses bounded exponential backoff and dead-letters after the retry budget", async () => {
+    let nowMs = Date.parse("2026-01-01T00:00:00.000Z");
+    const driver = new ProgrammableDriver(() => ({ status: "retry", detail: "temporary outage" }));
+    const dispatcher = new DeliveryDispatcher(db, { get: () => driver }, events, {
+      now: () => new Date(nowMs),
+      appendOnlyMaxAttempts: 10,
+    });
+    insertAppendDelivery(db, {
+      availableAt: new Date(nowMs).toISOString(),
+      deadlineAt: new Date(nowMs + 24 * 60 * 60 * 1000).toISOString(),
+    });
+
+    const observedDelays: number[] = [];
+    for (let attempt = 1; attempt <= 10; attempt += 1) {
+      await dispatcher.drain();
+      const row = db.raw
+        .prepare("SELECT status, available_at, attempt_count, last_error FROM deliveries WHERE id = 'delivery'")
+        .get() as { status: string; available_at: string; attempt_count: number; last_error: string | null };
+      expect(row.attempt_count).toBe(attempt);
+      if (attempt < 10) {
+        expect(row.status).toBe("pending");
+        const nextMs = Date.parse(row.available_at);
+        observedDelays.push(nextMs - nowMs);
+        nowMs = nextMs;
+      } else {
+        expect(row.status).toBe("dead-letter");
+        expect(row.last_error).toContain("Retry budget exhausted after 10 attempts");
+      }
+    }
+
+    expect(observedDelays).toEqual([250, 500, 1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]);
+    expect(driver.requests).toHaveLength(10);
+    expect(db.raw.prepare(
+      "SELECT status, count(*) AS count FROM delivery_attempts GROUP BY status ORDER BY status",
+    ).all()).toEqual([
+      { status: "dead-letter", count: 1 },
+      { status: "retry", count: 9 },
+    ]);
+  });
+
+  it("dead-letters an expired delivery without calling the driver", async () => {
+    const now = new Date("2026-01-01T00:00:00.000Z");
+    const driver = new ProgrammableDriver(() => ({ status: "delivered" }));
+    const dispatcher = new DeliveryDispatcher(db, { get: () => driver }, events, {
+      now: () => now,
+    });
+    insertAppendDelivery(db, {
+      availableAt: now.toISOString(),
+      deadlineAt: now.toISOString(),
+    });
+
+    await dispatcher.drain();
+
+    expect(driver.requests).toHaveLength(0);
+    expect(db.raw.prepare("SELECT status, last_error FROM deliveries WHERE id = 'delivery'").get()).toEqual({
+      status: "dead-letter",
+      last_error: "Delivery TTL expired",
+    });
+  });
+
+  it("records a permanent driver failure as a terminal dead-letter", async () => {
+    const now = new Date("2026-01-01T00:00:00.000Z");
+    const driver = new ProgrammableDriver(() => ({
+      status: "dead-letter",
+      detail: "HTTP 400: invalid append payload",
+    }));
+    const dispatcher = new DeliveryDispatcher(db, { get: () => driver }, events, {
+      now: () => now,
+    });
+    insertAppendDelivery(db, {
+      availableAt: now.toISOString(),
+      deadlineAt: new Date(now.getTime() + 60_000).toISOString(),
+    });
+
+    await dispatcher.drain();
+
+    expect(driver.requests).toHaveLength(1);
+    expect(db.raw.prepare(
+      "SELECT status, attempt_count, last_error FROM deliveries WHERE id = 'delivery'",
+    ).get()).toEqual({
+      status: "dead-letter",
+      attempt_count: 1,
+      last_error: "HTTP 400: invalid append payload",
+    });
+    expect(db.raw.prepare(
+      "SELECT attempt, status, detail FROM delivery_attempts WHERE delivery_id = 'delivery'",
+    ).get()).toEqual({
+      attempt: 1,
+      status: "dead-letter",
+      detail: "HTTP 400: invalid append payload",
+    });
+  });
+
+  it("forms fixed-window batches and keeps boundary and incompatible events separate", async () => {
+    vi.useFakeTimers();
+    let nowMs = Date.parse("2026-01-01T00:00:00.000Z");
+    vi.setSystemTime(nowMs);
+    const service = new StateHubService(db, events);
+    registerProducer(db, "append-producer", "append-producer-token");
+    const draft = service.createConfigDraft({
+      bindings: [appendBinding("primary", "audit.primary"), appendBinding("secondary", "audit.secondary")],
+      driverInstances: [{ id: "append-driver", driverType: "virtual", enabled: true, config: {} }],
+    });
+    service.publishConfig(draft.revision);
+    const driver = new ProgrammableDriver(() => ({ status: "delivered" }));
+    const dispatcher = new DeliveryDispatcher(db, { get: () => driver }, events, {
+      now: () => new Date(nowMs),
+    });
+    const emit = (input: OccurrenceEventInput): void => {
+      service.emitEvent("append-producer", "append-producer-token", input);
+    };
+
+    emit({ eventId: "first", type: "audit.primary", value: { sequence: 1 } });
+    nowMs += 99;
+    vi.setSystemTime(nowMs);
+    emit({ eventId: "second", type: "audit.primary", value: { sequence: 2 } });
+    await dispatcher.drain();
+    expect(driver.requests).toHaveLength(0);
+
+    nowMs += 1;
+    vi.setSystemTime(nowMs);
+    emit({ eventId: "at-boundary", type: "audit.primary", value: { sequence: 3 } });
+    emit({ eventId: "incompatible", type: "audit.secondary", value: { sequence: 4 } });
+    await dispatcher.drain();
+
+    expect(driver.requests).toHaveLength(1);
+    expect(driver.requests[0]?.batch?.map((item) => item.eventId)).toEqual(["first", "second"]);
+
+    nowMs += 100;
+    vi.setSystemTime(nowMs);
+    await dispatcher.drain();
+
+    expect(driver.requests).toHaveLength(3);
+    expect(driver.requests.slice(1).map((request) => request.batch?.map((item) => item.eventId)).sort())
+      .toEqual([["at-boundary"], ["incompatible"]]);
+    expect(db.raw.prepare(
+      "SELECT event_id, status FROM deliveries WHERE action_kind = 'append-only' ORDER BY created_at, event_id",
+    ).all()).toEqual([
+      { event_id: "first", status: "delivered" },
+      { event_id: "second", status: "delivered" },
+      { event_id: "at-boundary", status: "delivered" },
+      { event_id: "incompatible", status: "delivered" },
+    ]);
+    const batches = db.raw.prepare(
+      "SELECT event_id, batch_id FROM deliveries WHERE action_kind = 'append-only' ORDER BY event_id",
+    ).all() as Array<{ event_id: string; batch_id: string }>;
+    expect(batches.find((row) => row.event_id === "first")?.batch_id)
+      .toBe(batches.find((row) => row.event_id === "second")?.batch_id);
+    expect(new Set(batches.map((row) => row.batch_id)).size).toBe(3);
+  });
+});

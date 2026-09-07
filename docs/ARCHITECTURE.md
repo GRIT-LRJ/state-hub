@@ -74,6 +74,8 @@ SQLite 使用 WAL、foreign keys 和 busy timeout。历史保留滚动 7 天或 
 
 Core 在调用 driver 前比较 delivery 与 SQLite 当前 projection revision，并以 lease 值作为完成/重试写回的 fencing token。Core 或 driver 恢复只重放 SQLite 中每个资源的当前 projection；旧 stateful revision 被抑制，queued-effect 跨恢复边界被抑制，append-only 保持可恢复。对于 Generic HTTP，stateful 请求携带 `projectionRevision`，但 Core 无法撤销已经发出的远端请求；需要端到端“旧请求绝不晚到覆盖”时，目标端必须持久记录最高 revision 并拒绝更小的 revision。未实现该 CAS/fencing 合约的 HTTP 目标只具备 Core dispatch 前的陈旧任务防护。
 
+append-only 的 `batchWindowMs` 使用固定窗口：同一 binding action、DriverInstance 与 resourceChannel 的兼容事件共享持久 batch id，窗口边界到达后由 dispatcher 一次领取并进行一次 driver 调用。批次中的每条 delivery 与 OccurrenceEvent identity 仍独立保存；投递结果、attempt、TTL 和 dead-letter 逐条以 lease fencing 写回，因此重启恢复不会把批处理退化为多次单条调用。
+
 配置先保存草稿，完整校验并强制预览影响后，原子发布不可变 revision。回滚会创建新的 revision。新绑定立即针对当前 claim 重算 stateful 投影，但不重放历史事件。
 
 ## 5. HTTP API v1

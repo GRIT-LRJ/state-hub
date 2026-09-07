@@ -1,17 +1,29 @@
-import type { ActionKind, ActionPayload, DriverActionRequest } from "@state-hub/protocol";
+import type {
+  ActionKind,
+  ActionPayload,
+  DriverActionBatchItem,
+  DriverActionRequest,
+  DriverActionResult,
+} from "@state-hub/protocol";
 import { resourceKey } from "@state-hub/domain";
 import { randomUUID } from "node:crypto";
 import type { StateHubDatabase } from "./database.js";
-import type { DriverRegistry } from "./drivers.js";
+import type { Driver } from "./drivers.js";
 import type { HubEventBus } from "./events.js";
 
 interface DeliveryRow {
   id: string;
+  command_id: string | null;
+  producer_id: string | null;
+  event_id: string | null;
+  event_revision: number | null;
   driver_instance_id: string;
   resource_channel: string;
   action_kind: ActionKind;
   action_json: string | null;
   projection_revision: number | null;
+  batch_key: string | null;
+  batch_id: string | null;
   attempt_count: number;
   deadline_at: string | null;
   lease_until: string | null;
@@ -24,19 +36,49 @@ interface ProjectionRow {
   revision: number;
 }
 
+interface DriverProvider {
+  get(instanceId: string): Driver | undefined;
+}
+
+export interface DeliveryDispatcherOptions {
+  leaseDurationMs?: number;
+  now?: () => Date;
+  appendOnlyMaxAttempts?: number;
+  retryBaseMs?: number;
+  retryMaxMs?: number;
+}
+
+const DEFAULT_LEASE_DURATION_MS = 30_000;
+const DEFAULT_APPEND_ONLY_MAX_ATTEMPTS = 8;
+const DEFAULT_RETRY_BASE_MS = 250;
+const DEFAULT_RETRY_MAX_MS = 30_000;
+
 export class DeliveryDispatcher {
   #timer: NodeJS.Timeout | undefined;
   #running = false;
+  readonly #leaseDurationMs: number;
+  readonly #now: () => Date;
+  readonly #appendOnlyMaxAttempts: number;
+  readonly #retryBaseMs: number;
+  readonly #retryMaxMs: number;
 
   constructor(
     private readonly db: StateHubDatabase,
-    private readonly drivers: DriverRegistry,
+    private readonly drivers: DriverProvider,
     private readonly events: HubEventBus,
-    private readonly leaseDurationMs = 30_000,
-  ) {}
+    options: number | DeliveryDispatcherOptions = {},
+  ) {
+    const normalized = typeof options === "number" ? { leaseDurationMs: options } : options;
+    this.#leaseDurationMs = normalized.leaseDurationMs ?? DEFAULT_LEASE_DURATION_MS;
+    this.#now = normalized.now ?? (() => new Date());
+    this.#appendOnlyMaxAttempts =
+      normalized.appendOnlyMaxAttempts ?? DEFAULT_APPEND_ONLY_MAX_ATTEMPTS;
+    this.#retryBaseMs = normalized.retryBaseMs ?? DEFAULT_RETRY_BASE_MS;
+    this.#retryMaxMs = normalized.retryMaxMs ?? DEFAULT_RETRY_MAX_MS;
+  }
 
   recoverInterrupted(): number {
-    const completedAt = new Date().toISOString();
+    const completedAt = this.nowIso();
     const paused = this.outputsPaused();
     const suppressed: Array<{ delivery: DeliveryRow; detail: string }> = [];
     const recovered: string[] = [];
@@ -81,7 +123,7 @@ export class DeliveryDispatcher {
              WHERE id = ? AND status IN ('pending', 'leased')`,
           )
           .run(completedAt, detail, delivery.id);
-        this.recordAttempt(delivery, completedAt, "suppressed", detail);
+        this.recordAttempt(delivery, completedAt, completedAt, "suppressed", detail);
       }
 
       this.enqueueCurrentStateful(completedAt, recovered);
@@ -99,7 +141,7 @@ export class DeliveryDispatcher {
   }
 
   recoverCurrentStateful(driverInstanceId?: string): number {
-    const now = new Date().toISOString();
+    const now = this.nowIso();
     const recovered: string[] = [];
     this.db.transaction(() => this.enqueueCurrentStateful(now, recovered, driverInstanceId));
     for (const deliveryId of recovered) {
@@ -125,127 +167,226 @@ export class DeliveryDispatcher {
     this.#running = true;
     try {
       for (let index = 0; index < 100; index += 1) {
-        const delivery = this.claimNext();
-        if (!delivery) break;
-        await this.execute(delivery);
+        const deliveries = this.claimNext();
+        if (!deliveries) break;
+        await this.execute(deliveries);
       }
     } finally {
       this.#running = false;
     }
   }
 
-  private claimNext(): DeliveryRow | undefined {
-    const now = new Date();
+  private claimNext(): DeliveryRow[] | undefined {
+    const now = this.#now();
     const nowIso = now.toISOString();
-    const leaseUntil = new Date(now.getTime() + this.leaseDurationMs).toISOString();
+    const leaseUntil = new Date(now.getTime() + this.#leaseDurationMs).toISOString();
     return this.db.transaction(() => {
-      const row = this.db.raw
+      const anchor = this.db.raw
         .prepare(
           `SELECT * FROM deliveries
            WHERE (status = 'pending' AND available_at <= ?)
               OR (status = 'leased' AND lease_until <= ?)
-           ORDER BY created_at, id LIMIT 1`,
+           ORDER BY available_at, created_at, id LIMIT 1`,
         )
         .get(nowIso, nowIso) as DeliveryRow | undefined;
-      if (!row) return undefined;
-      this.db.raw
-        .prepare("UPDATE deliveries SET status = 'leased', lease_until = ?, attempt_count = attempt_count + 1 WHERE id = ?")
-        .run(leaseUntil, row.id);
-      return { ...row, attempt_count: row.attempt_count + 1, lease_until: leaseUntil };
+      if (!anchor) return undefined;
+      const rows = anchor.action_kind === "append-only" && anchor.batch_id
+        ? this.db.raw
+            .prepare(
+              `SELECT * FROM deliveries
+               WHERE batch_id = ?
+                 AND ((status = 'pending' AND available_at <= ?)
+                   OR (status = 'leased' AND lease_until <= ?))
+               ORDER BY event_revision, created_at, id`,
+            )
+            .all(anchor.batch_id, nowIso, nowIso) as DeliveryRow[]
+        : [anchor];
+      const claim = this.db.raw.prepare(
+        "UPDATE deliveries SET status = 'leased', lease_until = ?, attempt_count = attempt_count + 1 WHERE id = ?",
+      );
+      for (const row of rows) claim.run(leaseUntil, row.id);
+      return rows.map((row) => ({
+        ...row,
+        attempt_count: row.attempt_count + 1,
+        lease_until: leaseUntil,
+      }));
     });
   }
 
-  private async execute(delivery: DeliveryRow): Promise<void> {
-    const startedAt = new Date().toISOString();
-    if (delivery.action_kind === "stateful") {
-      if (delivery.projection_revision === null) {
-        this.finish(delivery, startedAt, "suppressed", "Stateful delivery has no projection revision");
+  private async execute(deliveries: DeliveryRow[]): Promise<void> {
+    const startedAt = this.nowIso();
+    const first = deliveries[0];
+    if (!first) return;
+    if (!this.isCompatibleBatch(deliveries)) {
+      this.finish(deliveries, startedAt, "dead-letter", "Persisted append-only batch is incompatible");
+      return;
+    }
+    if (first.action_kind === "stateful") {
+      if (first.projection_revision === null) {
+        this.finish(deliveries, startedAt, "suppressed", "Stateful delivery has no projection revision");
         return;
       }
       const current = this.db.raw
         .prepare("SELECT revision FROM projections WHERE resource_key = ?")
-        .get(resourceKey(delivery.driver_instance_id, delivery.resource_channel)) as { revision: number } | undefined;
-      if (!current || current.revision !== delivery.projection_revision) {
-        this.finish(delivery, startedAt, "suppressed", "A newer stateful projection exists");
+        .get(resourceKey(first.driver_instance_id, first.resource_channel)) as { revision: number } | undefined;
+      if (!current || current.revision !== first.projection_revision) {
+        this.finish(deliveries, startedAt, "suppressed", "A newer stateful projection exists");
         return;
       }
     }
-    if (delivery.action_kind !== "stateful" && this.outputsPaused()) {
-      this.finish(delivery, startedAt, "suppressed", "Outputs are paused");
+    if (first.action_kind !== "stateful" && this.outputsPaused()) {
+      this.finish(deliveries, startedAt, "suppressed", "Outputs are paused");
       return;
     }
-    if (delivery.deadline_at && Date.parse(delivery.deadline_at) <= Date.now()) {
-      this.finish(delivery, startedAt, "dead-letter", "Delivery TTL expired");
-      return;
+
+    const nowMs = this.#now().getTime();
+    const expired = deliveries.filter(
+      (delivery) => delivery.deadline_at && Date.parse(delivery.deadline_at) <= nowMs,
+    );
+    if (expired.length > 0) {
+      this.finish(expired, startedAt, "dead-letter", "Delivery TTL expired");
     }
-    const driver = this.drivers.get(delivery.driver_instance_id);
+    const active = deliveries.filter((delivery) => !expired.includes(delivery));
+    if (active.length === 0) return;
+
+    const driver = this.drivers.get(first.driver_instance_id);
     if (!driver) {
-      this.finish(delivery, startedAt, "dead-letter", "Driver instance is missing or disabled");
+      this.finish(active, startedAt, "dead-letter", "Driver instance is missing or disabled");
       return;
     }
-    const request: DriverActionRequest = {
-      deliveryId: delivery.id,
-      driverInstanceId: delivery.driver_instance_id,
-      resourceChannel: delivery.resource_channel,
-      actionKind: delivery.action_kind,
-      action: delivery.action_json ? (JSON.parse(delivery.action_json) as ActionPayload) : null,
-      ...(delivery.projection_revision === null ? {} : { projectionRevision: delivery.projection_revision }),
-      ...(delivery.deadline_at ? { deadlineAt: delivery.deadline_at } : {}),
-    };
-    let result;
+    const request = this.buildRequest(active);
+    let result: DriverActionResult;
     try {
       result = await driver.execute(request);
     } catch (error) {
-      result = { status: "retry" as const, detail: error instanceof Error ? error.message : String(error) };
+      result = { status: "retry", detail: error instanceof Error ? error.message : String(error) };
     }
     if (result.status !== "retry") {
-      this.finish(delivery, startedAt, result.status, result.detail);
+      this.finish(active, startedAt, result.status, result.detail);
       return;
     }
-    const retryAllowed =
-      (delivery.action_kind === "append-only" && delivery.attempt_count < 8) ||
-      (delivery.action_kind === "stateful" && delivery.attempt_count < 10);
-    if (!retryAllowed) {
-      this.finish(delivery, startedAt, "dead-letter", result.detail ?? "Retry budget exhausted");
-      return;
+
+    const retryable = active.filter((delivery) =>
+      (delivery.action_kind === "append-only" && delivery.attempt_count < this.#appendOnlyMaxAttempts) ||
+      (delivery.action_kind === "stateful" && delivery.attempt_count < 10),
+    );
+    const exhausted = active.filter((delivery) => !retryable.includes(delivery));
+    if (exhausted.length > 0) {
+      const retryBudget = first.action_kind === "append-only" ? this.#appendOnlyMaxAttempts : 10;
+      const detail = deliveryFailureDetail(
+        `Retry budget exhausted after ${retryBudget} attempts`,
+        result.detail,
+      );
+      this.finish(exhausted, startedAt, "dead-letter", detail);
     }
-    const delay = result.retryAfterMs ?? Math.min(30_000, 250 * 2 ** (delivery.attempt_count - 1));
-    const availableAt = new Date(Date.now() + delay).toISOString();
-    const rescheduled = this.db.transaction(() => {
-      const update = this.db.raw
-        .prepare(
-          `UPDATE deliveries
-           SET status = 'pending', available_at = ?, lease_until = NULL, last_error = ?
-           WHERE id = ? AND status = 'leased' AND lease_until = ?`,
-        )
-        .run(availableAt, result.detail ?? null, delivery.id, delivery.lease_until);
-      if (update.changes === 0) return false;
-      this.recordAttempt(delivery, startedAt, "retry", result.detail);
-      return true;
+    if (retryable.length === 0) return;
+
+    const exponentialDelay = Math.min(
+      this.#retryMaxMs,
+      this.#retryBaseMs * 2 ** (first.attempt_count - 1),
+    );
+    const requestedDelay =
+      result.retryAfterMs !== undefined && Number.isFinite(result.retryAfterMs) && result.retryAfterMs >= 0
+        ? result.retryAfterMs
+        : exponentialDelay;
+    const delay = Math.min(this.#retryMaxMs, Math.max(0, requestedDelay));
+    this.reschedule(retryable, startedAt, delay, result.detail);
+  }
+
+  private buildRequest(deliveries: DeliveryRow[]): DriverActionRequest {
+    const first = deliveries[0];
+    if (!first) throw new Error("Cannot build an empty delivery request");
+    const batch = first.batch_id
+      ? deliveries.map((delivery): DriverActionBatchItem => ({
+          deliveryId: delivery.id,
+          ...(delivery.producer_id ? { producerId: delivery.producer_id } : {}),
+          ...(delivery.event_id ? { eventId: delivery.event_id } : {}),
+          ...(delivery.event_revision === null ? {} : { eventRevision: delivery.event_revision }),
+          action: decodeAction(delivery.action_json),
+          ...(delivery.deadline_at ? { deadlineAt: delivery.deadline_at } : {}),
+        }))
+      : undefined;
+    return {
+      deliveryId: first.id,
+      ...(first.producer_id ? { producerId: first.producer_id } : {}),
+      ...(first.event_id ? { eventId: first.event_id } : {}),
+      ...(first.event_revision === null ? {} : { eventRevision: first.event_revision }),
+      driverInstanceId: first.driver_instance_id,
+      resourceChannel: first.resource_channel,
+      actionKind: first.action_kind,
+      action: decodeAction(first.action_json),
+      ...(first.projection_revision === null ? {} : { projectionRevision: first.projection_revision }),
+      ...(first.deadline_at ? { deadlineAt: first.deadline_at } : {}),
+      ...(first.batch_id ? { batchId: first.batch_id } : {}),
+      ...(batch ? { batch } : {}),
+    };
+  }
+
+  private isCompatibleBatch(deliveries: DeliveryRow[]): boolean {
+    const first = deliveries[0];
+    if (!first || deliveries.length === 1) return true;
+    return first.action_kind === "append-only" && Boolean(first.batch_id) && deliveries.every((delivery) =>
+      delivery.batch_id === first.batch_id &&
+      delivery.driver_instance_id === first.driver_instance_id &&
+      delivery.resource_channel === first.resource_channel &&
+      delivery.action_kind === first.action_kind,
+    );
+  }
+
+  private reschedule(
+    deliveries: DeliveryRow[],
+    startedAt: string,
+    delayMs: number,
+    detail?: string,
+  ): void {
+    const nowMs = this.#now().getTime();
+    const rescheduled: Array<{ deliveryId: string; availableAt: string }> = [];
+    this.db.transaction(() => {
+      for (const delivery of deliveries) {
+        const deadlineMs = delivery.deadline_at ? Date.parse(delivery.deadline_at) : Number.POSITIVE_INFINITY;
+        const availableAt = new Date(Math.min(nowMs + delayMs, deadlineMs)).toISOString();
+        const update = this.db.raw
+          .prepare(
+            `UPDATE deliveries
+             SET status = 'pending', available_at = ?, lease_until = NULL, last_error = ?
+             WHERE id = ? AND status = 'leased' AND lease_until = ?`,
+          )
+          .run(availableAt, detail ?? null, delivery.id, delivery.lease_until);
+        if (update.changes === 0) continue;
+        this.recordAttempt(delivery, startedAt, this.nowIso(), "retry", detail);
+        rescheduled.push({ deliveryId: delivery.id, availableAt });
+      }
     });
-    if (rescheduled) this.events.publish("delivery.retry-scheduled", { deliveryId: delivery.id, availableAt });
+    for (const item of rescheduled) {
+      this.events.publish("delivery.retry-scheduled", item);
+    }
   }
 
   private finish(
-    delivery: DeliveryRow,
+    deliveries: DeliveryRow[],
     startedAt: string,
     status: "delivered" | "dead-letter" | "suppressed",
     detail?: string,
   ): void {
-    const completedAt = new Date().toISOString();
-    const finished = this.db.transaction(() => {
-      const update = this.db.raw
-        .prepare(
-          `UPDATE deliveries
-           SET status = ?, completed_at = ?, lease_until = NULL, last_error = ?
-           WHERE id = ? AND status = 'leased' AND lease_until = ?`,
-        )
-        .run(status, completedAt, detail ?? null, delivery.id, delivery.lease_until);
-      if (update.changes === 0) return false;
-      this.recordAttempt(delivery, startedAt, status, detail);
-      return true;
+    const completedAt = this.nowIso();
+    const finished: string[] = [];
+    this.db.transaction(() => {
+      for (const delivery of deliveries) {
+        const update = this.db.raw
+          .prepare(
+            `UPDATE deliveries
+             SET status = ?, completed_at = ?, lease_until = NULL, last_error = ?
+             WHERE id = ? AND status = 'leased' AND lease_until = ?`,
+          )
+          .run(status, completedAt, detail ?? null, delivery.id, delivery.lease_until);
+        if (update.changes === 0) continue;
+        this.recordAttempt(delivery, startedAt, completedAt, status, detail);
+        finished.push(delivery.id);
+      }
     });
-    if (finished) this.events.publish(`delivery.${status}`, { deliveryId: delivery.id, detail });
+    for (const deliveryId of finished) {
+      this.events.publish(`delivery.${status}`, { deliveryId, detail });
+    }
   }
 
   private outputsPaused(): boolean {
@@ -297,12 +438,30 @@ export class DeliveryDispatcher {
     }
   }
 
-  private recordAttempt(delivery: DeliveryRow, startedAt: string, status: string, detail?: string): void {
+  private recordAttempt(
+    delivery: DeliveryRow,
+    startedAt: string,
+    completedAt: string,
+    status: string,
+    detail?: string,
+  ): void {
     this.db.raw
       .prepare(
         `INSERT INTO delivery_attempts(delivery_id, attempt, started_at, completed_at, status, detail)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(delivery.id, delivery.attempt_count, startedAt, new Date().toISOString(), status, detail ?? null);
+      .run(delivery.id, delivery.attempt_count, startedAt, completedAt, status, detail ?? null);
   }
+
+  private nowIso(): string {
+    return this.#now().toISOString();
+  }
+}
+
+function decodeAction(value: string | null): ActionPayload | null {
+  return value ? (JSON.parse(value) as ActionPayload) : null;
+}
+
+function deliveryFailureDetail(summary: string, cause?: string): string {
+  return cause ? `${summary}: ${cause}` : summary;
 }

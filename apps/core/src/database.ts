@@ -120,11 +120,16 @@ CREATE TABLE IF NOT EXISTS projections (
 CREATE TABLE IF NOT EXISTS deliveries (
   id TEXT PRIMARY KEY,
   command_id TEXT,
+  producer_id TEXT,
+  event_id TEXT,
+  event_revision INTEGER,
   driver_instance_id TEXT NOT NULL,
   resource_channel TEXT NOT NULL,
   action_kind TEXT NOT NULL,
   action_json TEXT,
   projection_revision INTEGER,
+  batch_key TEXT,
+  batch_id TEXT,
   status TEXT NOT NULL,
   attempt_count INTEGER NOT NULL DEFAULT 0,
   available_at TEXT NOT NULL,
@@ -193,6 +198,25 @@ export class StateHubDatabase {
     if (!producerColumns.some((column) => column.name === "source_definition_id")) {
       this.raw.exec("ALTER TABLE producer_tokens ADD COLUMN source_definition_id TEXT");
     }
+    const deliveryColumns = this.raw.pragma("table_info(deliveries)") as Array<{ name: string }>;
+    if (!deliveryColumns.some((column) => column.name === "producer_id")) {
+      this.raw.exec("ALTER TABLE deliveries ADD COLUMN producer_id TEXT");
+    }
+    if (!deliveryColumns.some((column) => column.name === "event_id")) {
+      this.raw.exec("ALTER TABLE deliveries ADD COLUMN event_id TEXT");
+    }
+    if (!deliveryColumns.some((column) => column.name === "event_revision")) {
+      this.raw.exec("ALTER TABLE deliveries ADD COLUMN event_revision INTEGER");
+    }
+    if (!deliveryColumns.some((column) => column.name === "batch_key")) {
+      this.raw.exec("ALTER TABLE deliveries ADD COLUMN batch_key TEXT");
+    }
+    if (!deliveryColumns.some((column) => column.name === "batch_id")) {
+      this.raw.exec("ALTER TABLE deliveries ADD COLUMN batch_id TEXT");
+    }
+    this.raw.exec(
+      "CREATE INDEX IF NOT EXISTS deliveries_open_batch ON deliveries(batch_key, status, attempt_count, available_at)",
+    );
   }
 
   close(): void {
