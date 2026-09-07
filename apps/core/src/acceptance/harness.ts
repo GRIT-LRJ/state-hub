@@ -27,6 +27,10 @@ interface WaitOptions {
   description?: string;
 }
 
+interface CoreAcceptanceHarnessOptions {
+  deliveryLeaseMs?: number;
+}
+
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
@@ -229,6 +233,13 @@ export class AdminClient {
     return await responseJson<RuntimeSnapshot>(await this.request("/api/v1/admin/snapshot"));
   }
 
+  async setPaused(paused: boolean): Promise<void> {
+    await responseJson<{ paused: boolean }>(await this.request("/api/v1/admin/outputs/pause", {
+      method: "POST",
+      body: JSON.stringify({ paused }),
+    }));
+  }
+
   private async request(path: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${this.harness.adminToken}`);
@@ -247,7 +258,7 @@ export class CoreAcceptanceHarness {
   #stderr = "";
   readonly #observers = new Set<EventObserver>();
 
-  private constructor(root: string) {
+  private constructor(root: string, private readonly options: CoreAcceptanceHarnessOptions) {
     const data = join(root, "data");
     const runtime = join(root, "runtime");
     this.paths = {
@@ -259,9 +270,9 @@ export class CoreAcceptanceHarness {
     };
   }
 
-  static async start(): Promise<CoreAcceptanceHarness> {
+  static async start(options: CoreAcceptanceHarnessOptions = {}): Promise<CoreAcceptanceHarness> {
     const root = await mkdtemp(join(tmpdir(), "state-hub-core-acceptance-"));
-    const harness = new CoreAcceptanceHarness(root);
+    const harness = new CoreAcceptanceHarness(root, options);
     try {
       await harness.startProcess();
       return harness;
@@ -436,6 +447,7 @@ export class CoreAcceptanceHarness {
     const childEnvironment = { ...process.env };
     delete childEnvironment.STATE_HUB_BOOTSTRAP_PRODUCER_ID;
     delete childEnvironment.STATE_HUB_BOOTSTRAP_TOKEN;
+    delete childEnvironment.STATE_HUB_DELIVERY_LEASE_MS;
     const child = spawn(process.execPath, ["--import", "tsx", entrypoint], {
       cwd: coreRoot,
       windowsHide: true,
@@ -447,6 +459,9 @@ export class CoreAcceptanceHarness {
         STATE_HUB_RUNTIME_DIR: this.paths.runtime,
         STATE_HUB_DB_PATH: this.paths.database,
         STATE_HUB_PORT: "0",
+        ...(this.options.deliveryLeaseMs
+          ? { STATE_HUB_DELIVERY_LEASE_MS: String(this.options.deliveryLeaseMs) }
+          : {}),
       },
     });
     this.#child = child;
@@ -466,7 +481,7 @@ export class CoreAcceptanceHarness {
         }
         const value = JSON.parse(await readFile(this.paths.discovery, "utf8")) as Discovery;
         return value.pid === child.pid ? value : false;
-      }, { timeoutMs: 10_000, description: "Core discovery file" });
+      }, { timeoutMs: 20_000, description: "Core discovery file" });
       this.#discovery = discovery;
       await this.waitFor(async () => {
         const response = await this.fetch("/health/live");

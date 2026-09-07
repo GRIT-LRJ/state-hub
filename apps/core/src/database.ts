@@ -177,6 +177,9 @@ CREATE TABLE IF NOT EXISTS history (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS history_created_at ON history(created_at);
+
+INSERT OR IGNORE INTO meta(key, value)
+SELECT 'projection_revision', CAST(COALESCE(MAX(revision), 0) AS TEXT) FROM projections;
 `;
 
 export class StateHubDatabase {
@@ -205,6 +208,18 @@ export class StateHubDatabase {
     const revision = Number.parseInt(row.value, 10) + 1;
     this.raw.prepare("UPDATE meta SET value = ? WHERE key = 'revision'").run(String(revision));
     return revision;
+  }
+
+  nextProjectionRevision(): number {
+    const row = this.raw.prepare("SELECT value FROM meta WHERE key = 'projection_revision'").get() as { value: string };
+    const revision = Number.parseInt(row.value, 10) + 1;
+    this.raw.prepare("UPDATE meta SET value = ? WHERE key = 'projection_revision'").run(String(revision));
+    return revision;
+  }
+
+  currentProjectionRevision(): number {
+    const row = this.raw.prepare("SELECT value FROM meta WHERE key = 'projection_revision'").get() as { value: string };
+    return Number.parseInt(row.value, 10);
   }
 
   currentRevision(): number {

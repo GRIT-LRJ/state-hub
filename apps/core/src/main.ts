@@ -32,9 +32,10 @@ if (instanceCount.count === 0) {
 }
 
 const drivers = new DriverRegistry(db, events);
-const dispatcher = new DeliveryDispatcher(db, drivers, events);
+const dispatcher = new DeliveryDispatcher(db, drivers, events, config.deliveryLeaseMs);
+dispatcher.recoverInterrupted();
 const ttlScheduler = new ClaimTtlScheduler(service, events);
-const app = createServer({ service, events, drivers, adminToken: config.adminToken });
+const app = createServer({ service, events, drivers, dispatcher, adminToken: config.adminToken });
 const address = await app.listen({ host: config.host, port: config.port });
 const port = Number.parseInt(new URL(address).port, 10);
 const discovery = {

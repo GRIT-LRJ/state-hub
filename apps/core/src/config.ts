@@ -9,6 +9,7 @@ export interface CoreConfig {
   spoolDir: string;
   host: "127.0.0.1";
   port: number;
+  deliveryLeaseMs: number;
   adminToken: string;
   bootstrapProducerId?: string;
   bootstrapProducerToken?: string;
@@ -32,6 +33,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
   if (!adminToken || adminToken.length < 32) {
     throw new Error("STATE_HUB_ADMIN_TOKEN must be provided by the Tauri supervisor and contain at least 32 characters");
   }
+  const deliveryLeaseMs = Number.parseInt(env.STATE_HUB_DELIVERY_LEASE_MS ?? "30000", 10);
+  if (!Number.isSafeInteger(deliveryLeaseMs) || deliveryLeaseMs <= 0) {
+    throw new Error("STATE_HUB_DELIVERY_LEASE_MS must be a positive integer");
+  }
   return {
     dataDir,
     runtimeDir,
@@ -40,6 +45,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     spoolDir: join(dataDir, "spool"),
     host: "127.0.0.1",
     port: Number.parseInt(env.STATE_HUB_PORT ?? "0", 10),
+    deliveryLeaseMs,
     adminToken,
     ...(env.STATE_HUB_BOOTSTRAP_PRODUCER_ID
       ? { bootstrapProducerId: env.STATE_HUB_BOOTSTRAP_PRODUCER_ID }

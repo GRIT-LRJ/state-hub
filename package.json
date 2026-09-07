@@ -11,6 +11,8 @@
     "build:sidecar": "node tools/prepare-sidecar.mjs",
     "check": "pnpm -r --if-present check",
     "test": "pnpm --filter @state-hub/protocol build && pnpm --filter @state-hub/domain build && pnpm -r --if-present test",
+    "test:acceptance": "pnpm --filter @state-hub/core test:acceptance",
+    "verify": "pnpm test && pnpm test:acceptance && pnpm check && pnpm build",
     "dev:core": "pnpm --filter @state-hub/core dev",
     "dev:desktop": "pnpm --filter @state-hub/desktop dev"
   },

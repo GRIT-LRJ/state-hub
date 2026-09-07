@@ -10,10 +10,13 @@
 
 ```powershell
 pnpm install
-pnpm check
 pnpm test
+pnpm test:acceptance
+pnpm check
 pnpm build
 ```
+
+也可运行 `pnpm verify` 串行执行完整标准门禁。`pnpm test` 只运行 unit/in-process tests；真实 Core、临时 SQLite、loopback HTTP/SSE 与 dispatcher 的 process-level acceptance 由 `pnpm test:acceptance` 单独运行，两者都必须通过。
 
 `pnpm build:sidecar` 会用 `@yao-pkg/pkg` 生成 Node 24 自包含 sidecar，并按 Tauri 要求命名为 `apps/desktop/src-tauri/binaries/state-hub-core-<target-triple>`。该目录是生成物，不提交版本库。随后可执行：
 
@@ -64,5 +67,7 @@ Hook 是短同步调用：先把命令原子写入 spool，再尝试 800ms loopb
 配置不匹配、报告不是完整 65 字节或设备数量不是 1 时拒绝写入。测试不会向设备发送报告；真实硬件 smoke 必须由人工明确触发。
 
 ## 发布门禁
+
+标准验证必须包含 `pnpm test`、`pnpm test:acceptance`、`pnpm check` 和 `pnpm build`。process-level acceptance 保持独立，不混入普通 unit test。
 
 stable v1 前必须在 Windows x64、macOS 实际目标架构和 Linux x64 分别执行安装/升级/卸载、单实例、托盘、开机启动、暂停恢复、断网重连与签名验证。未实测架构只能标记 preview。

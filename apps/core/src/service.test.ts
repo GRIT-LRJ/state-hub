@@ -106,7 +106,7 @@ describe("StateHub vertical slice", () => {
   });
 
   it("enforces producer authentication and returns 202 after durable work", async () => {
-    const app = createServer({ service, events, drivers, adminToken });
+    const app = createServer({ service, events, drivers, dispatcher, adminToken });
     const unauthorized = await app.inject({
       method: "PUT",
       url: "/api/v1/producers/codex/scopes/s1/claims/status",
@@ -136,6 +136,103 @@ describe("StateHub vertical slice", () => {
     expect(service.snapshot().projections[0]?.action?.params).toEqual({ color: "amber" });
     service.clearClaim("codex", producerToken, "session-decision", "status");
     expect(service.snapshot().projections[0]?.action?.params).toEqual({ color: "blue" });
+  });
+
+  it("advances projection revision only with the effective action and keeps its delivery aligned", async () => {
+    service.upsertClaim("codex", producerToken, "winner", "status", {
+      value: { phase: "working", color: "blue" },
+      urgency: "critical",
+    });
+    const initial = service.snapshot().projections[0];
+    expect(initial?.action?.params).toEqual({ color: "blue" });
+
+    service.upsertClaim("codex", producerToken, "lower", "status", {
+      value: { phase: "working", color: "green" },
+      urgency: "ambient",
+    });
+    expect(service.snapshot().projections[0]?.revision).toBe(initial?.revision);
+    expect(db.raw.prepare(
+      "SELECT projection_revision FROM deliveries WHERE action_kind = 'stateful' AND status = 'pending'",
+    ).all()).toEqual([{ projection_revision: initial?.revision }]);
+
+    await dispatcher.drain();
+    expect(db.raw.prepare(
+      "SELECT status FROM deliveries WHERE action_kind = 'stateful' AND projection_revision = ?",
+    ).get(initial?.revision)).toEqual({ status: "delivered" });
+
+    service.upsertClaim("codex", producerToken, "lower", "status", {
+      value: { phase: "working", color: "blue" },
+      urgency: "ambient",
+    });
+    expect(service.snapshot().projections[0]).toMatchObject({
+      revision: initial?.revision,
+      contributorClaimKeys: expect.arrayContaining([
+        "codex\u001fwinner\u001fstatus",
+        "codex\u001flower\u001fstatus",
+      ]),
+    });
+
+    service.upsertClaim("codex", producerToken, "winner", "status", {
+      value: { phase: "working", color: "blue" },
+      urgency: "critical",
+      expiresAt: "2020-01-01T00:00:00.000Z",
+      stalePolicy: "retain",
+    });
+    service.processDueClaimExpirations(new Date("2026-01-01T00:00:00.000Z"));
+    expect(service.snapshot().projections[0]?.revision).toBe(initial?.revision);
+
+    service.setPaused(true);
+    const pausedRevision = service.snapshot().projections[0]?.revision;
+    expect(pausedRevision).toBeGreaterThan(initial?.revision ?? 0);
+    service.setPaused(true);
+    expect(service.snapshot().projections[0]?.revision).toBe(pausedRevision);
+    expect(db.raw.prepare(
+      `SELECT count(*) AS count FROM deliveries
+       WHERE action_kind = 'stateful' AND projection_revision = ? AND status = 'pending'`,
+    ).get(pausedRevision)).toEqual({ count: 1 });
+  });
+
+  it("keeps projection revisions monotonic across older config publish and rollback", () => {
+    service.upsertClaim("codex", producerToken, "session", "status", {
+      value: { phase: "working", color: "blue" },
+      urgency: "critical",
+    });
+    const firstProjectionRevision = service.snapshot().projections[0]?.revision ?? 0;
+    const originalConfigRevision = (db.raw
+      .prepare("SELECT revision FROM config_revisions WHERE status = 'published'")
+      .get() as { revision: number }).revision;
+    const greenBinding: Binding = {
+      ...statefulBinding,
+      mapping: { color: { kind: "constant", value: "green" } },
+    };
+    const olderDraft = service.createConfigDraft({
+      bindings: [greenBinding, effectBinding],
+      driverInstances: [{ id: "virtual-main", driverType: "virtual", enabled: true, config: {} }],
+    });
+
+    service.upsertClaim("codex", producerToken, "session", "status", {
+      value: { phase: "working", color: "red" },
+      urgency: "critical",
+    });
+    service.upsertClaim("codex", producerToken, "session", "status", {
+      value: { phase: "working", color: "amber" },
+      urgency: "critical",
+    });
+    const beforePublish = service.snapshot().projections[0]?.revision ?? 0;
+    expect(beforePublish).toBeGreaterThan(firstProjectionRevision);
+
+    service.publishConfig(olderDraft.revision);
+    const afterOlderPublish = service.snapshot().projections[0]?.revision ?? 0;
+    expect(afterOlderPublish).toBeGreaterThan(beforePublish);
+    expect(afterOlderPublish).not.toBe(olderDraft.revision);
+    expect(service.snapshot().projections[0]?.action?.params).toEqual({ color: "green" });
+
+    const rollback = service.createRollbackDraft(originalConfigRevision);
+    service.publishConfig(rollback.revision);
+    const afterRollback = service.snapshot().projections[0]?.revision ?? 0;
+    expect(afterRollback).toBeGreaterThan(afterOlderPublish);
+    expect(service.snapshot().projections[0]?.action?.params).toEqual({ color: "amber" });
+    expect(db.currentProjectionRevision()).toBe(afterRollback);
   });
 
   it("validates values for producers tied to a SourceDefinition", () => {

@@ -34,6 +34,7 @@ export class OsSecretProvider implements SecretProvider {
 
 export class VirtualDriver implements Driver {
   readonly state = new Map<string, ActionPayload>();
+  readonly #projectionRevisions = new Map<string, number>();
 
   constructor(
     private readonly instanceId: string,
@@ -41,12 +42,23 @@ export class VirtualDriver implements Driver {
   ) {}
 
   async execute(request: DriverActionRequest): Promise<DriverActionResult> {
+    if (request.actionKind === "stateful") {
+      if (request.projectionRevision === undefined) {
+        return { status: "dead-letter", detail: "Stateful action requires a projection revision" };
+      }
+      const currentRevision = this.#projectionRevisions.get(request.resourceChannel);
+      if (currentRevision !== undefined && request.projectionRevision < currentRevision) {
+        return { status: "suppressed", detail: "Virtual output already applied a newer projection revision" };
+      }
+      this.#projectionRevisions.set(request.resourceChannel, request.projectionRevision);
+    }
     if (request.action) this.state.set(request.resourceChannel, request.action);
     else this.state.delete(request.resourceChannel);
     this.events.publish("virtual.rendered", {
       driverInstanceId: this.instanceId,
       resourceChannel: request.resourceChannel,
       action: request.action,
+      ...(request.projectionRevision === undefined ? {} : { projectionRevision: request.projectionRevision }),
     });
     return { status: "delivered" };
   }
@@ -159,7 +171,9 @@ export class GenericHttpDriver implements Driver {
       const response = await pinnedJsonRequest(this.config, {
         deliveryId: request.deliveryId,
         channel: request.resourceChannel,
+        actionKind: request.actionKind,
         action: request.action,
+        ...(request.projectionRevision === undefined ? {} : { projectionRevision: request.projectionRevision }),
       });
       if (response.statusCode >= 200 && response.statusCode < 300) return { status: "delivered" };
       if (response.statusCode === 408 || response.statusCode === 429 || response.statusCode >= 500) {

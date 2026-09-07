@@ -3,6 +3,7 @@ import type { Binding, OccurrenceEventInput, StateClaimInput } from "@state-hub/
 import { claimInputSchema, occurrenceInputSchema } from "@state-hub/protocol";
 import { authenticateProducer, generateToken, registerProducer, safeTokenEqual } from "./auth.js";
 import type { DriverRegistry } from "./drivers.js";
+import type { DeliveryDispatcher } from "./dispatcher.js";
 import type { HubEventBus } from "./events.js";
 import { HubError, type PublishedConfig, type SnapshotClaim, type StateHubService } from "./service.js";
 import { builtinCatalog } from "./builtins.js";
@@ -11,6 +12,7 @@ interface ServerOptions {
   service: StateHubService;
   events: HubEventBus;
   drivers: DriverRegistry;
+  dispatcher: DeliveryDispatcher;
   adminToken: string;
 }
 
@@ -266,6 +268,7 @@ export function createServer(options: ServerOptions): FastifyInstance {
     const revision = Number.parseInt((request.params as { revision: string }).revision, 10);
     options.service.publishConfig(revision);
     options.drivers.invalidate();
+    options.dispatcher.recoverCurrentStateful();
     return await reply.send({ revision, status: "published" });
   });
 

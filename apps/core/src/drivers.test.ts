@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { GenericHttpDriver, Vk87Driver } from "./drivers.js";
+import { GenericHttpDriver, VirtualDriver, Vk87Driver } from "./drivers.js";
+import { HubEventBus } from "./events.js";
 
 describe("driver guardrails", () => {
   it("blocks loopback targets unless private-network access is explicit", async () => {
@@ -23,5 +24,26 @@ describe("driver guardrails", () => {
     ) as unknown;
     expect(() => new Vk87Driver(profile)).not.toThrow();
     expect(() => new Vk87Driver({ ...(profile as object), usage: 1 })).toThrow(/verified device selector/u);
+  });
+
+  it("rejects a stale stateful revision after a newer virtual projection was applied", async () => {
+    const driver = new VirtualDriver("virtual", new HubEventBus());
+    expect((await driver.execute({
+      deliveryId: "newer",
+      driverInstanceId: "virtual",
+      resourceChannel: "status",
+      actionKind: "stateful",
+      action: { name: "render", params: { phase: "newer" } },
+      projectionRevision: 2,
+    })).status).toBe("delivered");
+    expect((await driver.execute({
+      deliveryId: "older",
+      driverInstanceId: "virtual",
+      resourceChannel: "status",
+      actionKind: "stateful",
+      action: { name: "render", params: { phase: "older" } },
+      projectionRevision: 1,
+    })).status).toBe("suppressed");
+    expect(driver.state.get("status")?.params).toEqual({ phase: "newer" });
   });
 });

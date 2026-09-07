@@ -10,6 +10,8 @@ State Hub 是一个本地优先的桌面信号路由与输出协调平台。它�
 corepack enable
 pnpm install
 pnpm test
+pnpm test:acceptance
+pnpm check
 pnpm build
 pnpm dev:core
 ```
@@ -28,6 +30,8 @@ pnpm dev:core
 - `docs/ARCHITECTURE.md`：唯一规范性架构文档
 
 历史设计稿已移入 `docs/legacy/`，仅作背景资料，不再具有规范性。
+
+提交前运行 `pnpm verify`。其中 unit test 与真实 Core process acceptance 是两个独立门禁，后者不会被 `pnpm test` 隐式替代。
 
 ## 许可证
 

@@ -251,7 +251,7 @@ export class StateHubService {
             nowIso,
           );
       }
-      this.recomputeStateful(undefined, revision, nowIso);
+      this.recomputeStateful(undefined, nowIso);
       this.appendHistory(
         "claims.expired",
         null,
@@ -359,7 +359,7 @@ export class StateHubService {
             .get(producerId, scopeId, signalId) as ClaimRow,
         );
         this.enqueueClaimEffects(commandId, claim, now);
-        this.recomputeStateful(commandId, revision, now);
+        this.recomputeStateful(commandId, now);
         this.appendHistory("claim.upsert", claimKey(producerId, scopeId, signalId), { revision }, now);
       },
     );
@@ -388,7 +388,7 @@ export class StateHubService {
           .prepare("DELETE FROM claim_expirations WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
           .run(producerId, scopeId, signalId);
         this.db.raw.prepare("DELETE FROM binding_transitions WHERE input_key = ?").run(key);
-        this.recomputeStateful(commandId, revision, now);
+        this.recomputeStateful(commandId, now);
         this.appendHistory("claim.clear", key, { revision }, now);
       },
     );
@@ -502,7 +502,7 @@ export class StateHubService {
               now,
             );
         }
-        this.recomputeStateful(commandId, revision, now);
+        this.recomputeStateful(commandId, now);
         this.appendHistory("snapshot.replace", producerId, { claimCount: claims.length, revision }, now);
       },
     );
@@ -521,7 +521,7 @@ export class StateHubService {
         .prepare("INSERT OR IGNORE INTO acknowledgements(claim_key, claim_revision, acknowledged_at) VALUES (?, ?, ?)")
         .run(claimKey(producerId, scopeId, signalId), claimRevision, now);
       const revision = this.db.nextRevision();
-      this.recomputeStateful(undefined, revision, now);
+      this.recomputeStateful(undefined, now);
     });
     this.events.publish("snapshot.changed", this.snapshot());
   }
@@ -532,9 +532,20 @@ export class StateHubService {
       this.db.raw
         .prepare("UPDATE settings SET value_json = ? WHERE key = 'outputsPaused'")
         .run(JSON.stringify(paused));
+      const suppressedDeliveries = paused
+        ? this.db.raw
+            .prepare(
+              `UPDATE deliveries
+               SET status = 'suppressed', completed_at = ?, lease_until = NULL,
+                   last_error = 'Outputs paused before delivery'
+               WHERE action_kind IN ('queued-effect', 'append-only')
+                 AND status IN ('pending', 'leased')`,
+            )
+            .run(now).changes
+        : 0;
       const revision = this.db.nextRevision();
-      this.recomputeStateful(undefined, revision, now);
-      this.appendHistory(paused ? "outputs.paused" : "outputs.resumed", null, {}, now);
+      this.recomputeStateful(undefined, now);
+      this.appendHistory(paused ? "outputs.paused" : "outputs.resumed", null, { suppressedDeliveries }, now);
     });
     this.events.publish("outputs.pause-changed", { paused });
     this.events.publish("snapshot.changed", this.snapshot());
@@ -594,7 +605,7 @@ export class StateHubService {
       this.db.raw
         .prepare("UPDATE config_revisions SET status = 'published', published_at = ? WHERE revision = ?")
         .run(now, revision);
-      this.recomputeStateful(undefined, revision, now);
+      this.recomputeStateful(undefined, now);
       this.appendHistory("config.published", String(revision), {}, now);
     });
     this.events.publish("config.published", { revision });
@@ -770,7 +781,7 @@ export class StateHubService {
       .run(producerId, scopeId, sourceType ?? null, now, now);
   }
 
-  private recomputeStateful(commandId: string | undefined, revision: number, now: string): void {
+  private recomputeStateful(commandId: string | undefined, now: string): void {
     const bindings = this.listBindings().filter((binding) => binding.target.actionKind === "stateful");
     const claims = this.listClaims();
     const candidates: ActionCandidate[] = [];
@@ -782,11 +793,11 @@ export class StateHubService {
             .prepare("SELECT 1 FROM acknowledgements WHERE claim_key = ? AND claim_revision = ?")
             .get(key, claim.revision),
         );
-        const candidate = candidateFromClaim(binding, claim, revision, acknowledged, new Date(now));
+        const candidate = candidateFromClaim(binding, claim, claim.revision, acknowledged, new Date(now));
         if (candidate) candidates.push(candidate);
       }
     }
-    let next = arbitrate(candidates, revision);
+    let next = arbitrate(candidates, 0);
     const paused = this.isPaused();
     if (paused) next = next.map((projection) => ({ ...projection, action: null, urgency: null }));
     const byKey = new Map(next.map((projection) => [projection.resourceKey, projection]));
@@ -799,13 +810,14 @@ export class StateHubService {
           urgency: null,
           contributorBindingIds: [],
           contributorClaimKeys: [],
-          revision,
+          revision: previous.revision,
         });
       }
     }
     for (const projection of byKey.values()) {
       const previous = old.find((item) => item.resourceKey === projection.resourceKey);
       const changed = !previous || actionSignature(previous.action) !== actionSignature(projection.action);
+      const projectionRevision = changed ? this.db.nextProjectionRevision() : previous.revision;
       this.db.raw
         .prepare(
           `INSERT INTO projections(
@@ -827,7 +839,7 @@ export class StateHubService {
             bindingIds: projection.contributorBindingIds,
             claimKeys: projection.contributorClaimKeys,
           }),
-          revision,
+          projectionRevision,
           now,
         );
       if (changed) {
@@ -838,7 +850,7 @@ export class StateHubService {
           "stateful",
           projection.action,
           now,
-          revision,
+          projectionRevision,
         );
       }
     }
