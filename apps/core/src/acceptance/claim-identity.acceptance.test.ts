@@ -17,7 +17,7 @@ function binding(id: string, signalId: string | undefined, channel: string, acti
     selector: { producerId: "identity", scopePattern: "*", ...(signalId ? { signalId } : {}) },
     conditions: [],
     mapping: { phase: { kind: "pointer", pointer: "/phase" } },
-    target: { driverInstanceId: "virtual-main", resourceChannel: channel, actionKind, actionName: "render" },
+    target: { driverInstanceId: "virtual-main", resourceChannel: channel, actionKind, actionName: actionKind === "stateful" ? "render" : "notify" },
     honorAcknowledgement: true,
   };
 }
@@ -68,7 +68,7 @@ describe("ClaimIdentity across real Core APIs", () => {
     try {
       const producer = await harness.admin.createProducer("identity");
       await harness.admin.publishConfig({
-        bindings: [binding("transition", undefined, "notifications", "queued-effect")],
+        bindings: [binding("transition", undefined, "notifications", "append-only")],
         driverInstances: [virtualInstance],
       });
       const events = await harness.observeEvents();
@@ -89,7 +89,7 @@ describe("ClaimIdentity across real Core APIs", () => {
       const owner = await harness.admin.createProducer("a_b");
       const other = await harness.admin.createProducer("axb");
       await harness.admin.publishConfig({
-        bindings: [{ ...binding("shared-transition", undefined, "notifications", "queued-effect"), selector: { scopePattern: "*" } }],
+        bindings: [{ ...binding("shared-transition", undefined, "notifications", "append-only"), selector: { scopePattern: "*" } }],
         driverInstances: [virtualInstance],
       });
       const events = await harness.observeEvents();

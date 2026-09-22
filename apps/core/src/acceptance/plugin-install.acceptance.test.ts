@@ -149,7 +149,7 @@ describe("plugin installation through the real Core management API", () => {
           driverInstances: [{
             id: "development-driver", driverType: "community.sample.driver", enabled: true, config: {},
           }],
-        })).toThrow("Driver type is not installed");
+        })).toThrow("Configuration validation failed");
       } finally { reopened.close(); }
       const invalid = fixture({ type: "not-a-json-schema-type" });
       try {

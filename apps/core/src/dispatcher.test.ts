@@ -35,7 +35,7 @@ function appendBinding(id: string, eventType: string): Binding {
       driverInstanceId: "append-driver",
       resourceChannel: "audit",
       actionKind: "append-only",
-      actionName: "append",
+      actionName: "notify",
     },
     batchWindowMs: 100,
   };

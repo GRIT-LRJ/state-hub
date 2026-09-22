@@ -89,8 +89,10 @@ async function pinnedJsonRequest(
   const data = Buffer.from(JSON.stringify(payload), "utf8");
   for (const name of Object.keys(config.headers ?? {})) {
     if (/^host$/iu.test(name)) throw new Error("HTTP Host header must match the authorized target");
-    if (/^(authorization|cookie|proxy-authorization|x-api-key)$/iu.test(name)) {
-      throw new Error(`Sensitive header ${name} must use a credential reference, not inline configuration`);
+    if (/^(content-length|transfer-encoding|connection|upgrade)$/iu.test(name) ||
+      /^proxy-/iu.test(name)) throw new Error("HTTP transport header cannot be overridden");
+    if (/^(authorization|cookie|x-api-key)$/iu.test(name)) {
+      throw new Error("Sensitive HTTP headers must use a credential reference, not inline configuration");
     }
   }
   const request = url.protocol === "https:" ? httpsRequest : httpRequest;
@@ -304,7 +306,7 @@ interface InstanceRow {
 }
 
 export class DriverRegistry {
-  readonly #cache = new Map<string, Driver>();
+  readonly #cache = new Map<string, { signature: string; driver: Driver }>();
 
   constructor(
     private readonly db: StateHubDatabase,
@@ -314,27 +316,36 @@ export class DriverRegistry {
   ) {}
 
   get(instanceId: string): Driver | undefined {
-    const cached = this.#cache.get(instanceId);
-    if (cached) return cached;
     const row = this.db.raw.prepare("SELECT * FROM driver_instances WHERE id = ?").get(instanceId) as
       | InstanceRow
       | undefined;
-    if (!row || row.enabled !== 1) return undefined;
+    const cached = this.#cache.get(instanceId);
+    if (!row || row.enabled !== 1) {
+      if (cached) void cached.driver.close?.();
+      this.#cache.delete(instanceId);
+      return undefined;
+    }
+    const signature = JSON.stringify([row.driver_type, row.config_json]);
+    if (cached?.signature === signature) return cached.driver;
+    if (cached) void cached.driver.close?.();
+    this.#cache.delete(instanceId);
     const config = JSON.parse(row.config_json) as Record<string, unknown>;
+    const builtinType = row.driver_type.startsWith("official.") ? row.driver_type.slice("official.".length) :
+      row.driver_type;
     let driver: Driver;
-    if (row.driver_type === "virtual") driver = new VirtualDriver(row.id, this.events);
-    else if (row.driver_type === "http") driver = new GenericHttpDriver(config as unknown as HttpDriverConfig);
-    else if (row.driver_type === "pushplus") driver = new PushPlusDriver(config as unknown as PushPlusConfig, this.secrets);
-    else if (row.driver_type === "vk87") driver = new Vk87Driver(config.profile);
+    if (builtinType === "virtual") driver = new VirtualDriver(row.id, this.events);
+    else if (builtinType === "http") driver = new GenericHttpDriver(config as unknown as HttpDriverConfig);
+    else if (builtinType === "pushplus") driver = new PushPlusDriver(config as unknown as PushPlusConfig, this.secrets);
+    else if (builtinType === "vk87") driver = new Vk87Driver(config.profile);
     else if (this.plugins?.hasDriver(row.driver_type)) {
       driver = { execute: async (request) => await this.plugins!.execute(row.driver_type, request, config) };
     } else return undefined;
-    this.#cache.set(instanceId, driver);
+    this.#cache.set(instanceId, { signature, driver });
     return driver;
   }
 
   invalidate(): void {
-    for (const driver of this.#cache.values()) void driver.close?.();
+    for (const entry of this.#cache.values()) void entry.driver.close?.();
     this.#cache.clear();
   }
 }

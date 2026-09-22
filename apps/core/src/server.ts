@@ -56,6 +56,16 @@ export function createServer(options: ServerOptions): FastifyInstance {
     finally { release(); }
   };
 
+  let configMutationTail = Promise.resolve();
+  const mutateConfig = async <T>(work: () => Promise<T>): Promise<T> => {
+    const previous = configMutationTail;
+    let release: () => void = () => undefined;
+    configMutationTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try { return await work(); }
+    finally { release(); }
+  };
+
   const producerPolicy = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     if (request.headers.origin) {
       await reply.code(403).send({ error: { code: "BROWSER_ORIGIN_FORBIDDEN", message: "Producer API is not a browser API" } });
@@ -369,13 +379,20 @@ export function createServer(options: ServerOptions): FastifyInstance {
     return await reply.code(201).send(result);
   });
 
-  app.post("/api/v1/admin/config/drafts/:revision/publish", { preHandler: adminAuth }, async (request, reply) => {
-    const revision = Number.parseInt((request.params as { revision: string }).revision, 10);
-    options.service.publishConfig(revision);
-    options.drivers.invalidate();
-    options.dispatcher.recoverCurrentStateful();
-    return await reply.send({ revision, status: "published" });
-  });
+  app.post("/api/v1/admin/config/drafts/:revision/publish", { preHandler: adminAuth }, async (request, reply) =>
+    await mutateConfig(async () => {
+      const revision = Number.parseInt((request.params as { revision: string }).revision, 10);
+      options.dispatcher.stop();
+      try {
+        await options.dispatcher.waitForIdle();
+        options.service.publishConfig(revision);
+        options.drivers.invalidate();
+        options.dispatcher.recoverCurrentStateful();
+        return await reply.send({ revision, status: "published" });
+      } finally {
+        options.dispatcher.start();
+      }
+    }));
 
   app.post("/api/v1/admin/config/revisions/:revision/rollback", { preHandler: adminAuth }, async (request, reply) => {
     const sourceRevision = Number.parseInt((request.params as { revision: string }).revision, 10);

@@ -73,6 +73,8 @@ export const driverDefinitions: DriverDefinition[] = [
         baseUrl: { type: "string", format: "uri", pattern: "^https?://" },
         method: { enum: ["POST", "PUT"], default: "POST" },
         privateTargetOrigin: { type: "string", format: "uri", pattern: "^https?://" },
+        allowPrivateNetwork: { type: "boolean", description: "Deprecated; does not grant access" },
+        maxResponseBytes: { type: "integer", minimum: 1, maximum: 1048576 },
         timeoutMs: { type: "integer", minimum: 100, maximum: 30000, default: 5000 },
       },
     },
@@ -93,6 +95,7 @@ export const driverDefinitions: DriverDefinition[] = [
       properties: {
         tokenSecretRef: { type: "string", format: "statehub-secret-ref" },
         topic: { type: "string" },
+        endpoint: { type: "string", format: "uri", pattern: "^https?://" },
       },
     },
     actions: {
@@ -117,7 +120,22 @@ export const driverDefinitions: DriverDefinition[] = [
       properties: {
         profile: {
           type: "object",
-          description: "A verified 65-byte protocol profile for VID 374A / PID A270 / usage FFFF:0002",
+          additionalProperties: false,
+          required: ["enabled", "vendorId", "productId", "usagePage", "usage",
+            "featureReportLength", "reportId", "completedReportHex",
+            "decisionReportHex", "restoreReportHex"],
+          properties: {
+            enabled: { const: true },
+            vendorId: { const: 14154 },
+            productId: { const: 41584 },
+            usagePage: { const: 65535 },
+            usage: { const: 2 },
+            featureReportLength: { const: 65 },
+            reportId: { const: 0 },
+            completedReportHex: { type: "string", pattern: "^00[0-9a-fA-F]{128}$" },
+            decisionReportHex: { type: "string", pattern: "^00[0-9a-fA-F]{128}$" },
+            restoreReportHex: { type: "string", pattern: "^00[0-9a-fA-F]{128}$" },
+          },
         },
       },
     },

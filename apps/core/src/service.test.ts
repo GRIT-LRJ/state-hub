@@ -94,8 +94,21 @@ describe("StateHub vertical slice", () => {
       "SELECT count(*) AS count FROM deliveries WHERE action_kind = 'append-only' AND status = 'pending'",
     ).get() as { count: number }).count).toBe(1);
     await dispatcher.drain();
+    expect(() => service.publishConfig(removal.revision)).toThrow(
+      "Settle the driver's idle state before removing or disabling its instance",
+    );
+    const idle = service.createConfigDraft({
+      bindings: [],
+      driverInstances: [{ id: "virtual-main", driverType: "virtual", enabled: true, config: {} }],
+    });
+    service.publishConfig(idle.revision);
+    await dispatcher.drain();
     service.publishConfig(removal.revision);
     expect(service.exportConfig().driverInstances).toHaveLength(0);
+    expect(service.snapshot().projections).toHaveLength(0);
+    expect(service.snapshot().pendingDeliveries).toBe(0);
+    dispatcher.recoverInterrupted();
+    expect(service.snapshot().pendingDeliveries).toBe(0);
   });
 
   it("does not repeat a transition-only claim effect for an identical value", () => {
@@ -292,21 +305,21 @@ describe("StateHub vertical slice", () => {
       bindings: [{
         id: sensitive,
         name: sensitive,
-        enabled: sensitive as unknown as boolean,
+        enabled: true,
         selector: { producerId: "codex", eventType: sensitive, scopePattern: "*" },
         conditions: [],
         mapping: { content: { kind: "constant", value: sensitive } },
         target: {
           driverInstanceId: "virtual-main",
           resourceChannel: sensitive,
-          actionKind: sensitive as Binding["target"]["actionKind"],
+          actionKind: "append-only",
           actionName: "notify",
         },
       }, statefulBinding],
       driverInstances: [{
         id: "virtual-main",
         driverType: "virtual",
-        enabled: sensitive as unknown as boolean,
+        enabled: true,
         config: {},
       }],
     });
@@ -315,6 +328,8 @@ describe("StateHub vertical slice", () => {
       value: { color: sensitive, phase: sensitive },
     });
     service.emitEvent("codex", producerToken, { eventId: sensitive, type: sensitive });
+    // Legacy rows may predate the current config validator; support export still redacts them.
+    db.raw.prepare("UPDATE deliveries SET action_kind = ? WHERE event_id = ?").run(sensitive, sensitive);
 
     const bundle = service.diagnosticBundle();
     expect(JSON.stringify(bundle)).not.toContain(sensitive);

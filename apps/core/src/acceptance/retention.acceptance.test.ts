@@ -32,7 +32,7 @@ const appendBinding: Binding = {
     driverInstanceId: "virtual-main",
     resourceChannel: "retention-append",
     actionKind: "append-only",
-    actionName: "append",
+    actionName: "notify",
   },
   batchWindowMs: 120_000,
 };
@@ -73,7 +73,7 @@ describe("Core historical retention maintenance", () => {
         bindings: [{
           ...appendBinding,
           batchWindowMs: 0,
-          target: { ...appendBinding.target, driverInstanceId: "retention-http" },
+          target: { ...appendBinding.target, driverInstanceId: "retention-http", actionName: "append" },
         }],
         driverInstances: [{
           id: "retention-http",

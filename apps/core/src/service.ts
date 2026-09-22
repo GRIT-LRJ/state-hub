@@ -30,6 +30,7 @@ import { validateClaimValue, validateEventValue } from "./schema-validation.js";
 import { safeDeliveryErrorSummary } from "./delivery-diagnostics.js";
 import { dedupeIdentityHash } from "./dedupe-identity.js";
 import { PluginRepository } from "./plugin-repository.js";
+import { ConfigValidationError, validatePublishedConfig, validMappedAction } from "./config-validation.js";
 
 interface ClaimRow {
   producer_id: string;
@@ -612,12 +613,25 @@ export class StateHubService {
     this.validateConfig(config);
     return this.db.transaction(() => {
       const revision = this.db.nextRevision();
-      const currentBindingIds = new Set(this.listBindings().map((binding) => binding.id));
-      const nextBindingIds = new Set(config.bindings.map((binding) => binding.id));
+      const currentBindings = this.listBindings();
+      const currentById = new Map(currentBindings.map((binding) => [binding.id, binding]));
+      const nextById = new Map(config.bindings.map((binding) => [binding.id, binding]));
+      const changed = [
+        ...currentBindings.filter((binding) => stableStringify(binding) !==
+          stableStringify(nextById.get(binding.id))),
+        ...config.bindings.filter((binding) => stableStringify(binding) !==
+          stableStringify(currentById.get(binding.id))),
+      ];
+      const claims = this.listClaims();
+      const affectedClaims = claims.filter((claim) => changed.some((binding) =>
+        bindingMatchesClaim(binding, claim))).length;
       const impact = {
-        bindingsAdded: [...nextBindingIds].filter((id) => !currentBindingIds.has(id)),
-        bindingsRemoved: [...currentBindingIds].filter((id) => !nextBindingIds.has(id)),
-        currentClaimsReevaluated: this.listClaims().length,
+        bindingsAdded: [...nextById.keys()].filter((id) => !currentById.has(id)),
+        bindingsRemoved: [...currentById.keys()].filter((id) => !nextById.has(id)),
+        bindingsUpdated: [...nextById.keys()].filter((id) =>
+          currentById.has(id) && stableStringify(currentById.get(id)) !== stableStringify(nextById.get(id))),
+        currentClaimsReevaluated: claims.length,
+        currentClaimsAffected: affectedClaims,
         historicalEventsReplayed: 0,
       };
       this.db.raw
@@ -640,13 +654,20 @@ export class StateHubService {
       this.validateConfig(config);
       const replacements = new Map(config.driverInstances.map((instance) => [instance.id, instance]));
       const currentInstances = this.db.raw.prepare(
-        "SELECT id, driver_type, enabled FROM driver_instances",
-      ).all() as Array<{ id: string; driver_type: string; enabled: number }>;
+        "SELECT id, driver_type, config_json, enabled FROM driver_instances",
+      ).all() as Array<{ id: string; driver_type: string; config_json: string; enabled: number }>;
+      const changedConfigIds = new Set<string>();
+      const retiredInstanceIds = new Set<string>();
       for (const current of currentInstances) {
         const replacement = replacements.get(current.id);
+        const configChanged = Boolean(replacement &&
+          (current.driver_type !== replacement.driverType ||
+            stableStringify(JSON.parse(current.config_json)) !== stableStringify(replacement.config)));
+        if (configChanged) changedConfigIds.add(current.id);
+        const retiring = !replacement || !replacement.enabled;
         const changed = !replacement || current.driver_type !== replacement.driverType ||
           current.enabled !== (replacement.enabled ? 1 : 0);
-        if (!changed) continue;
+        if (!changed && !retiring) continue;
         const unfinished = this.db.raw.prepare(
           `SELECT 1 FROM deliveries WHERE driver_instance_id = ? AND action_kind = 'append-only'
              AND status IN ('pending', 'leased') LIMIT 1`,
@@ -655,6 +676,28 @@ export class StateHubService {
           throw new HubError("CONFIG_PENDING_DELIVERIES",
             "Settle append-only deliveries before changing their driver instance", 409);
         }
+        if (retiring) {
+          const activeOutput = this.db.raw.prepare(
+            "SELECT 1 FROM projections WHERE driver_instance_id = ? AND action_json IS NOT NULL LIMIT 1",
+          ).get(current.id);
+          const unfinishedState = this.db.raw.prepare(
+            `SELECT 1 FROM deliveries WHERE driver_instance_id = ? AND action_kind = 'stateful'
+               AND status IN ('pending', 'leased') LIMIT 1`,
+          ).get(current.id);
+          if (activeOutput || unfinishedState) {
+            throw new HubError("CONFIG_ACTIVE_OUTPUT",
+              "Settle the driver's idle state before removing or disabling its instance", 409);
+          }
+          retiredInstanceIds.add(current.id);
+        }
+      }
+      for (const instanceId of changedConfigIds) {
+        this.db.raw.prepare(
+          `UPDATE deliveries SET status = 'suppressed', completed_at = ?,
+             lease_until = NULL, last_error = 'Driver configuration changed before delivery'
+           WHERE driver_instance_id = ? AND action_kind = 'stateful'
+             AND status IN ('pending', 'leased')`,
+        ).run(now, instanceId);
       }
       this.db.raw.prepare("DELETE FROM bindings").run();
       this.db.raw.prepare("DELETE FROM driver_instances").run();
@@ -681,6 +724,32 @@ export class StateHubService {
         .prepare("UPDATE config_revisions SET status = 'published', published_at = ? WHERE revision = ?")
         .run(now, revision);
       this.recomputeStateful(undefined, now);
+      for (const instanceId of retiredInstanceIds) {
+        this.db.raw.prepare(
+          `UPDATE deliveries SET status = 'suppressed', completed_at = ?, lease_until = NULL,
+             last_error = 'Driver instance retired before queued effect delivery'
+           WHERE driver_instance_id = ? AND action_kind = 'queued-effect'
+             AND status IN ('pending', 'leased')`,
+        ).run(now, instanceId);
+        this.db.raw.prepare("DELETE FROM projections WHERE driver_instance_id = ?").run(instanceId);
+      }
+      for (const instanceId of changedConfigIds) {
+        const projections = this.db.raw.prepare(
+          "SELECT resource_channel, action_json, revision FROM projections WHERE driver_instance_id = ?",
+        ).all(instanceId) as Array<{ resource_channel: string; action_json: string | null; revision: number }>;
+        for (const projection of projections) {
+          const unfinished = this.db.raw.prepare(
+            `SELECT 1 FROM deliveries WHERE driver_instance_id = ? AND resource_channel = ?
+               AND action_kind = 'stateful' AND projection_revision = ?
+               AND status IN ('pending', 'leased') LIMIT 1`,
+          ).get(instanceId, projection.resource_channel, projection.revision);
+          if (!unfinished) {
+            this.enqueueDelivery(undefined, instanceId, projection.resource_channel, "stateful",
+              projection.action_json ? JSON.parse(projection.action_json) as NonNullable<Projection["action"]> : null,
+              now, projection.revision);
+          }
+        }
+      }
       this.appendHistory("config.published", String(revision), {}, now);
     });
     this.events.publish("config.published", { revision });
@@ -689,7 +758,7 @@ export class StateHubService {
 
   createRollbackDraft(sourceRevision: number): { revision: number; impact: Record<string, unknown> } {
     const row = this.db.raw
-      .prepare("SELECT config_json FROM config_revisions WHERE revision = ?")
+      .prepare("SELECT config_json FROM config_revisions WHERE revision = ? AND status IN ('published', 'superseded')")
       .get(sourceRevision) as { config_json: string } | undefined;
     if (!row) throw new HubError("CONFIG_REVISION_NOT_FOUND", "Configuration revision not found", 404);
     return this.createConfigDraft(JSON.parse(row.config_json) as PublishedConfig);
@@ -918,6 +987,9 @@ export class StateHubService {
     let next = arbitrate(candidates, 0);
     const paused = this.isPaused();
     if (paused) next = next.map((projection) => ({ ...projection, action: null, urgency: null }));
+    for (const projection of next) {
+      if (projection.action) this.assertMappedAction(projection.driverInstanceId, "stateful", projection.action);
+    }
     const byKey = new Map(next.map((projection) => [projection.resourceKey, projection]));
     const old = this.listProjections();
     for (const previous of old) {
@@ -996,12 +1068,14 @@ export class StateHubService {
         this.appendHistory("delivery.suppressed", binding.id, { reason: "outputs-paused" }, now);
         continue;
       }
+      const action = buildAction(binding, claim.value);
+      this.assertMappedAction(binding.target.driverInstanceId, binding.target.actionKind, action);
       this.enqueueDelivery(
         commandId,
         binding.target.driverInstanceId,
         binding.target.resourceChannel,
         binding.target.actionKind,
-        buildAction(binding, claim.value),
+        action,
         now,
       );
     }
@@ -1015,6 +1089,7 @@ export class StateHubService {
         continue;
       }
       const action = buildAction(binding, event.value);
+      this.assertMappedAction(binding.target.driverInstanceId, binding.target.actionKind, action);
       const batchWindowMs = binding.target.actionKind === "append-only" ? binding.batchWindowMs ?? 0 : 0;
       const deliveryDelayMs = binding.target.actionKind === "append-only" ? 0 : binding.batchWindowMs ?? 0;
       this.enqueueDelivery(
@@ -1108,36 +1183,22 @@ export class StateHubService {
       );
   }
 
-  private validateConfig(config: PublishedConfig): void {
-    const instanceIds = new Set<string>();
-    const physicalKeys = new Set<string>();
-    for (const instance of config.driverInstances) {
-      if (instanceIds.has(instance.id)) throw new HubError("DUPLICATE_DRIVER_INSTANCE", instance.id);
-      instanceIds.add(instance.id);
-      if (!["virtual", "http", "pushplus", "vk87"].includes(instance.driverType) &&
-        !this.plugins.hasInstalledDriverType(instance.driverType)) {
-        throw new HubError("UNKNOWN_DRIVER_TYPE", "Driver type is not installed");
-      }
-      if (instance.physicalResourceKey) {
-        if (physicalKeys.has(instance.physicalResourceKey)) {
-          throw new HubError("PHYSICAL_RESOURCE_CONFLICT", instance.physicalResourceKey, 409);
-        }
-        physicalKeys.add(instance.physicalResourceKey);
-      }
+  private assertMappedAction(driverInstanceId: string, kind: ActionKind, action: NonNullable<Projection["action"]>): void {
+    const row = this.db.raw.prepare("SELECT driver_type FROM driver_instances WHERE id = ?")
+      .get(driverInstanceId) as { driver_type: string } | undefined;
+    if (!row || !validMappedAction(row.driver_type, action.name, kind, action.params, this.plugins)) {
+      throw new HubError("INVALID_MAPPED_ACTION", "Mapped action does not satisfy its driver contract");
     }
-    const bindingIds = new Set<string>();
-    for (const binding of config.bindings) {
-      if (bindingIds.has(binding.id)) throw new HubError("DUPLICATE_BINDING", binding.id);
-      bindingIds.add(binding.id);
-      if (!instanceIds.has(binding.target.driverInstanceId)) {
-        throw new HubError("UNKNOWN_DRIVER_INSTANCE", binding.target.driverInstanceId);
+  }
+
+  private validateConfig(config: PublishedConfig): void {
+    try {
+      validatePublishedConfig(config, this.plugins);
+    } catch (error) {
+      if (error instanceof ConfigValidationError) {
+        throw new HubError(error.code, "Configuration validation failed", error.statusCode);
       }
-      if (
-        binding.batchWindowMs !== undefined &&
-        (!Number.isSafeInteger(binding.batchWindowMs) || binding.batchWindowMs < 0)
-      ) {
-        throw new HubError("INVALID_BATCH_WINDOW", "batchWindowMs must be a non-negative safe integer");
-      }
+      throw error;
     }
   }
 
