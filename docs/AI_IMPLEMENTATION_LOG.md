@@ -516,3 +516,56 @@ PASS；Spec PASS；Correctness architecture PASS；Security PASS；Crash/Recover
 ### Commit
 
 产品实现 `348f1a9`；集成修复 `df8f9f2`；验收基础设施 `ce22ccf`。
+
+
+## Issue #16 — 桌面 Sidecar 监督和可靠 SSE 重连
+
+### 这张 Issue 要解决什么
+
+让桌面应用在 Core 意外退出或事件流中断后自己恢复，并确保每次连接都先读取完整的当前状态，再开始监听变化。
+
+### 原来有什么问题
+
+Tauri 只启动一次 Core；Core 崩溃后桌面不会重启它。界面同时启动快照请求和 SSE，可能先处理事件再拿到基线；SSE 结束后也没有完整的重连循环。Tauri 的 ready 事件还把管理令牌一起广播给窗口监听器。
+
+### 我改了什么
+
+Tauri 现在监督 sidecar：每次启动分配新的私有管理令牌和代次，核对 ready 消息属于当前子进程；异常退出或启动失败后按 250、500、1000、2000 毫秒退避，连续第五次失败停止自动重启，稳定运行 30 秒后重新计算失败预算。应用退出会结束子进程；若宿主意外消失，受监督 Core 会在 stdin 断开时自行退出。事件只广播代次和安全原因码，管理令牌仍由私有命令提供。
+
+桌面连接循环对每次初连和重连先取权威快照、核对 Core 代次，再订阅 SSE。SSE 的初始 snapshot 和后续事件只触发重新取快照；断流、启动失败或快照失败会清除旧画面并持续有界退避重试。迟到的旧代次快照不会覆盖新状态。Core 若随机监听到浏览器禁用的端口，会关闭该监听并重新申请，避免服务已 ready 但 WebView 无法访问。
+
+### 为什么这样改
+
+SQLite 和 Core HTTP 快照是状态事实源，事件流只通知“需要再读一次”。明确的连接周期和代次检查让重连不会沿用旧令牌或旧状态。sidecar 的有限重启预算防止持续失败时无限生成进程；父管道断开则覆盖宿主异常退出的清理窗口。随机端口必须能被 Fetch 使用；[WHATWG Fetch 的端口阻断规则](https://fetch.spec.whatwg.org/#port-blocking)包含 Windows 可能分配的 6666 等端口。
+
+### 哪些文件发生变化
+
+Tauri 的 `supervisor.rs` 与 `lib.rs`，桌面 `connection-loop.ts`、`api.ts`、`App.tsx`，Core 的 `main.ts` 与 `fetch-safe-listener.ts`；真实 Core 验收夹具、桌面单测和验收测试。仓库测试脚本现在运行桌面验收。Windows acceptance runner 的每文件新 fork 调整作为独立基础设施提交。
+
+### 数据库是否变化
+
+没有 schema、migration 或 backfill。Core 重启继续使用已有 SQLite 和 discovery 机制；本 Issue 只改变进程、HTTP 监听及界面连接生命周期。
+
+### 外部行为是否变化
+
+桌面在 Core 暂不可用时显示断连并自行重试；Core 恢复后重新读取快照。SSE 断开不再使界面长期停在旧值。Core 的 ready 事件不再携带令牌；私有 `core_connection` 命令新增代次。随机端口如果落入 Fetch 禁用列表，会在写 discovery 前重新选择。连续五次快速 sidecar 失败后停止自动重启，需要重新启动桌面应用。
+
+### 风险
+
+更频繁的快照请求会增加少量本地 HTTP 负载，事件刷新已合并串行执行。重启上限可能在持续的外部启动故障期间要求用户重启桌面；这符合本 Issue 的有界策略。真实 Core 进程与桌面连接循环已联合验收，原生 GUI 安装包与三平台 smoke 属 #23 的后续验收。
+
+### 测试
+
+桌面单测验证快照先于订阅、SSE 初始通知和断流后的多次重连、启动失败后恢复、旧代次迟到结果被丢弃，且不显示不可信错误文本。真实 Core 验收在快照与 SSE 之间写入 claim，确认初始 SSE 通知补上竞态；强杀 Core 后重新取得新快照。另用父管道关闭验证 Core 退出且可再次启动。Rust 单测验证 ready 消息的 PID/端口校验和连续失败的退避及上限，`cargo test --lib` 2/2、`cargo fmt --check` 通过。禁用端口单测强制分配 6666 和 10080，验证关闭、重选和耗尽上限。最终 `pnpm verify` 四项门禁通过；Core 单测 73/73、Core acceptance 15 文件 32/32、桌面单测 5/5、桌面 acceptance 2/2。
+
+### Reviewer 曾发现的问题
+
+Review 发现快照到订阅的空窗必须借助 SSE 初始 snapshot 事件重新取快照，已加入解析与真实 Core 竞态验收；还补了启动失败后恢复用例。最终门禁一次碰巧由 Windows 分配端口 6666，Core ready 但 Fetch 报 `bad port`；直接用本地 HTTP 服务复现并对照 Fetch 标准后，加入禁用端口重选和有界测试。Windows Vitest 复用 fork 仍偶发 `ERR_IPC_CHANNEL_CLOSED`；各文件单跑通过，改成每文件新 fork 并重新完成全部正式门禁。原生编译发现一个 Rust 锁守卫生命周期错误，已修复并重跑 Rust 测试。最终 Critical 0、High 0；Spec PASS、Correctness architecture PASS、Security PASS、Crash/Recovery PASS。
+
+### 最终状态
+
+PASS。
+
+### Commit
+
+产品实现 `49e9745`；验收基础设施 `2665147`。
