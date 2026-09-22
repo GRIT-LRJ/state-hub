@@ -6,7 +6,7 @@ import type { DriverRegistry } from "./drivers.js";
 import type { DeliveryDispatcher } from "./dispatcher.js";
 import type { HubEventBus } from "./events.js";
 import { HubError, type PublishedConfig, type SnapshotClaim, type StateHubService } from "./service.js";
-import { builtinCatalog } from "./builtins.js";
+import { PluginInstallError, PluginRepository } from "./plugin-repository.js";
 
 interface ServerOptions {
   service: StateHubService;
@@ -14,6 +14,7 @@ interface ServerOptions {
   drivers: DriverRegistry;
   dispatcher: DeliveryDispatcher;
   adminToken: string;
+  plugins?: PluginRepository;
 }
 
 function bearerToken(request: FastifyRequest): string | undefined {
@@ -38,6 +39,10 @@ const idParamsSchema = {
 
 export function createServer(options: ServerOptions): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: 1_048_576, trustProxy: false });
+  const plugins = options.plugins ?? new PluginRepository(options.service.db);
+  app.addContentTypeParser("application/vnd.statehub.plugin", { parseAs: "buffer" }, (_request, body, done) => {
+    done(null, body);
+  });
   const rate = new Map<string, { window: number; count: number }>();
 
   const producerPolicy = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
@@ -82,6 +87,10 @@ export function createServer(options: ServerOptions): FastifyInstance {
   };
 
   app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof PluginInstallError) {
+      void reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } });
+      return;
+    }
     if (error instanceof HubError) {
       void reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } });
       return;
@@ -218,7 +227,28 @@ export function createServer(options: ServerOptions): FastifyInstance {
 
   app.get("/api/v1/admin/bindings", { preHandler: adminAuth }, async () => ({ bindings: options.service.listBindings() }));
 
-  app.get("/api/v1/admin/catalog", { preHandler: adminAuth }, async () => builtinCatalog);
+  app.get("/api/v1/admin/catalog", { preHandler: adminAuth }, async () => plugins.catalog());
+
+  app.get("/api/v1/admin/plugins", { preHandler: adminAuth }, async () => ({ plugins: plugins.installed() }));
+
+  app.get("/api/v1/admin/plugins/trusted-publishers", { preHandler: adminAuth }, async () =>
+    ({ publishers: plugins.trustedPublishers() }));
+
+  app.post("/api/v1/admin/plugins/trusted-publishers", { preHandler: adminAuth }, async (request, reply) => {
+    const body = request.body as { id?: unknown; publicKeyPem?: unknown } | null;
+    if (!body || typeof body.id !== "string" || typeof body.publicKeyPem !== "string") {
+      throw new PluginInstallError("INVALID_PUBLISHER", "Publisher ID and Ed25519 public key are required");
+    }
+    return await reply.code(201).send(plugins.trustPublisher(body.id, body.publicKeyPem));
+  });
+
+  app.post("/api/v1/admin/plugins/install", { onRequest: adminAuth, bodyLimit: 128 * 1024 * 1024 },
+    async (request, reply) => {
+      if (request.headers["content-type"] !== "application/vnd.statehub.plugin" || !Buffer.isBuffer(request.body)) {
+        throw new PluginInstallError("INVALID_PLUGIN_UPLOAD", "A binary plugin package is required");
+      }
+      return await reply.code(201).send(plugins.install(request.body));
+    });
 
   app.post("/api/v1/admin/producers", { preHandler: adminAuth }, async (request, reply) => {
     const body = request.body as { producerId?: string; sourceDefinitionId?: string };
@@ -227,7 +257,7 @@ export function createServer(options: ServerOptions): FastifyInstance {
     }
     if (
       body.sourceDefinitionId &&
-      !builtinCatalog.sourceDefinitions.some((definition) => definition.id === body.sourceDefinitionId)
+      !plugins.sourceDefinition(body.sourceDefinitionId)
     ) {
       return await reply.code(400).send({ error: { code: "UNKNOWN_SOURCE_DEFINITION", message: "Unknown source definition" } });
     }

@@ -13,8 +13,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --exclude \"src/acceptance/**\"",
-    "test:acceptance": "vitest run src/acceptance --maxWorkers=2",
+    "test": "pnpm --filter @state-hub/plugin-kit build && vitest run --exclude \"src/acceptance/**\"",
+    "test:acceptance": "pnpm --filter @state-hub/plugin-kit build && vitest run src/acceptance --maxWorkers=2",
     "test:performance": "vitest run src/performance.test.ts",
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js"
@@ -27,13 +27,15 @@
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "better-sqlite3": "^12.2.0",
-    "fastify": "^5.5.0"
+    "fastify": "^5.5.0",
+    "@state-hub/plugin-kit": "workspace:*"
   },
   "optionalDependencies": {
     "node-hid": "^3.2.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
-    "tsx": "^4.20.5"
+    "tsx": "^4.20.5",
+    "fflate": "^0.8.2"
   }
 }

@@ -29,6 +29,7 @@ import { authenticateProducer } from "./auth.js";
 import { validateClaimValue, validateEventValue } from "./schema-validation.js";
 import { safeDeliveryErrorSummary } from "./delivery-diagnostics.js";
 import { dedupeIdentityHash } from "./dedupe-identity.js";
+import { PluginRepository } from "./plugin-repository.js";
 
 interface ClaimRow {
   producer_id: string;
@@ -197,6 +198,7 @@ export class StateHubService {
   constructor(
     readonly db: StateHubDatabase,
     readonly events: HubEventBus,
+    private readonly plugins: PluginRepository = new PluginRepository(db),
   ) {}
 
   isPaused(): boolean {
@@ -364,7 +366,7 @@ export class StateHubService {
       idempotencyKey,
       { scopeId, signalId, input },
       () => {
-        const validationError = validateClaimValue(this.db, producerId, signalId, input.value);
+        const validationError = validateClaimValue(this.db, producerId, signalId, input.value, this.plugins);
         if (validationError) throw new HubError("SOURCE_SCHEMA_VIOLATION", validationError, 422);
       },
       (commandId, revision, now) => {
@@ -453,7 +455,7 @@ export class StateHubService {
       idempotencyKey ?? input.eventId,
       input,
       () => {
-        const validationError = validateEventValue(this.db, producerId, input.type, input.value);
+        const validationError = validateEventValue(this.db, producerId, input.type, input.value, this.plugins);
         if (validationError) throw new HubError("SOURCE_SCHEMA_VIOLATION", validationError, 422);
       },
       (commandId, revision, now) => {
@@ -517,7 +519,7 @@ export class StateHubService {
           const identity = JSON.stringify([claim.scopeId, claim.signalId]);
           if (identities.has(identity)) throw new HubError("DUPLICATE_SNAPSHOT_CLAIM", "Snapshot contains a duplicate claim identity");
           identities.add(identity);
-          const validationError = validateClaimValue(this.db, producerId, claim.signalId, claim.value);
+          const validationError = validateClaimValue(this.db, producerId, claim.signalId, claim.value, this.plugins);
           if (validationError) throw new HubError("SOURCE_SCHEMA_VIOLATION", validationError, 422);
         }
       },

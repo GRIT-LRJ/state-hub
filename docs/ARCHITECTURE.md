@@ -97,7 +97,7 @@ Core 只监听 loopback 随机端口，并写 current-user discovery 文件。�
 
 ## 6. 扩展协议
 
-`.statehub-plugin` 是确定性 ZIP，包含 manifest、schema、checksums、签名、许可证和平台二进制或 TS bundle。正式模式只信任官方 root 或用户明确添加的 publisher；未签名包只在开发模式运行。
+`.statehub-plugin` 是确定性 ZIP，包含 manifest、schema、checksums、签名、许可证和平台二进制或 TS bundle。正式模式只信任官方 root 或用户明确添加的 publisher；未签名包只在开发模式运行。 Core 将 publisher 公钥、已验包及版本化定义持久保存；管理 Catalog 合并官方与已准许插件的定义，生产者来源校验使用同一 Catalog。正式模式不激活先前在开发模式安装的未签名定义。
 
 运行时为一包一子进程，使用 JSON-RPC 2.0 over stdio，并以 `Content-Length` framing。握手协商协议版本和 capability。更新在旁路进程中验证 schema/migration/health，成功后原子激活；卸载前检查实例与绑定依赖。
 

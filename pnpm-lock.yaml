@@ -29,6 +29,9 @@ importers:
       '@state-hub/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@state-hub/plugin-kit':
+        specifier: workspace:*
+        version: link:../../packages/plugin-kit
       '@state-hub/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -51,6 +54,9 @@ importers:
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
+      fflate:
+        specifier: ^0.8.2
+        version: 0.8.3
       tsx:
         specifier: ^4.20.5
         version: 4.23.13

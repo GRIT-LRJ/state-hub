@@ -193,6 +193,29 @@ CREATE TABLE IF NOT EXISTS config_revisions (
   created_at TEXT NOT NULL,
   published_at TEXT
 );
+CREATE TABLE IF NOT EXISTS plugin_publishers (
+  id TEXT PRIMARY KEY,
+  public_key_pem TEXT NOT NULL,
+  key_fingerprint TEXT NOT NULL,
+  trusted_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS plugin_packages (
+  id TEXT NOT NULL,
+  version TEXT NOT NULL,
+  publisher_id TEXT NOT NULL,
+  signed INTEGER NOT NULL,
+  manifest_json TEXT NOT NULL,
+  source_definitions_json TEXT NOT NULL,
+  driver_definitions_json TEXT NOT NULL,
+  archive_sha256 TEXT NOT NULL,
+  archive_blob BLOB NOT NULL,
+  installed_at TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (id, version)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS plugin_packages_one_active ON plugin_packages(id) WHERE active = 1;
+
 
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,

@@ -2,6 +2,7 @@ import AjvModule, { type ValidateFunction } from "ajv";
 import addFormatsModule from "ajv-formats";
 import type { StateHubDatabase } from "./database.js";
 import { builtinCatalog } from "./builtins.js";
+import { PluginRepository } from "./plugin-repository.js";
 
 type AjvInstance = {
   compile(schema: object): ValidateFunction;
@@ -27,6 +28,34 @@ for (const source of builtinCatalog.sourceDefinitions) {
   }
 }
 
+const installedValidators = new WeakMap<StateHubDatabase, Map<string, ValidateFunction>>();
+
+function installedValidator(
+  db: StateHubDatabase,
+  plugins: PluginRepository,
+  definitionId: string,
+  kind: "claim" | "event",
+  name: string,
+): ValidateFunction | undefined {
+  const source = plugins.sourceDefinition(definitionId);
+  const schema = kind === "claim" ? source?.claimSchemas[name] : source?.eventSchemas[name];
+  if (!schema) return undefined;
+  let cache = installedValidators.get(db);
+  if (!cache) {
+    cache = new Map();
+    installedValidators.set(db, cache);
+  }
+  const key = JSON.stringify([source?.id, source?.version, kind, name, schema]);
+  let validator = cache.get(key);
+  if (!validator) {
+    const pluginAjv = new AjvConstructor({ allErrors: true, strict: false });
+    addFormats(pluginAjv);
+    validator = pluginAjv.compile(schema);
+    cache.set(key, validator);
+  }
+  return validator;
+}
+
 function producerDefinition(db: StateHubDatabase, producerId: string): string | undefined {
   const row = db.raw
     .prepare("SELECT source_definition_id FROM producer_tokens WHERE producer_id = ?")
@@ -43,10 +72,12 @@ export function validateClaimValue(
   producerId: string,
   signalId: string,
   value: unknown,
+  plugins: PluginRepository = new PluginRepository(db),
 ): string | undefined {
   const definition = producerDefinition(db, producerId);
   if (!definition) return undefined;
-  const validate = claimValidators.get(`${definition}\u001f${signalId}`);
+  const validate = claimValidators.get(`${definition}\u001f${signalId}`) ??
+    installedValidator(db, plugins, definition, "claim", signalId);
   if (!validate) return `Signal ${signalId} is not declared by source definition ${definition}`;
   return validate(value) ? undefined : describe(validate);
 }
@@ -56,10 +87,12 @@ export function validateEventValue(
   producerId: string,
   eventType: string,
   value: unknown,
+  plugins: PluginRepository = new PluginRepository(db),
 ): string | undefined {
   const definition = producerDefinition(db, producerId);
   if (!definition) return undefined;
-  const validate = eventValidators.get(`${definition}\u001f${eventType}`);
+  const validate = eventValidators.get(`${definition}\u001f${eventType}`) ??
+    installedValidator(db, plugins, definition, "event", eventType);
   if (!validate) return `Event ${eventType} is not declared by source definition ${definition}`;
   return validate(value) ? undefined : describe(validate);
 }

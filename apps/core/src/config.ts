@@ -14,6 +14,7 @@ export interface CoreConfig {
   retentionMaxBytes: number;
   retentionIntervalMs: number;
   adminToken: string;
+  pluginDevelopmentMode: boolean;
   bootstrapProducerId?: string;
   bootstrapProducerToken?: string;
 }
@@ -61,6 +62,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     retentionMaxBytes,
     retentionIntervalMs,
     adminToken,
+    pluginDevelopmentMode: env.STATE_HUB_PLUGIN_DEVELOPMENT_MODE === "true",
     ...(env.STATE_HUB_BOOTSTRAP_PRODUCER_ID
       ? { bootstrapProducerId: env.STATE_HUB_BOOTSTRAP_PRODUCER_ID }
       : {}),

@@ -7,6 +7,7 @@ import { DeliveryDispatcher } from "./dispatcher.js";
 import { DriverRegistry } from "./drivers.js";
 import { HubEventBus } from "./events.js";
 import { RetentionService } from "./retention.js";
+import { PluginRepository } from "./plugin-repository.js";
 import { createServer } from "./server.js";
 import { StateHubService } from "./service.js";
 import { ClaimTtlScheduler } from "./ttl-scheduler.js";
@@ -18,7 +19,8 @@ mkdirSync(config.spoolDir, { recursive: true });
 
 const db = new StateHubDatabase(config.databasePath);
 const events = new HubEventBus();
-const service = new StateHubService(db, events);
+const plugins = new PluginRepository(db, config.pluginDevelopmentMode);
+const service = new StateHubService(db, events, plugins);
 const retention = new RetentionService(db, {
   maxAgeMs: config.retentionMaxAgeMs,
   maxBytes: config.retentionMaxBytes,
@@ -40,7 +42,7 @@ const drivers = new DriverRegistry(db, events);
 const dispatcher = new DeliveryDispatcher(db, drivers, events, config.deliveryLeaseMs);
 dispatcher.recoverInterrupted();
 const ttlScheduler = new ClaimTtlScheduler(service, events);
-const app = createServer({ service, events, drivers, dispatcher, adminToken: config.adminToken });
+const app = createServer({ service, events, drivers, dispatcher, plugins, adminToken: config.adminToken });
 const address = await app.listen({ host: config.host, port: config.port });
 const port = Number.parseInt(new URL(address).port, 10);
 const discovery = {

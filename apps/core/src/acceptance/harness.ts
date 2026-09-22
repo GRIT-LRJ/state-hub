@@ -29,6 +29,7 @@ interface WaitOptions {
 
 interface CoreAcceptanceHarnessOptions {
   deliveryLeaseMs?: number;
+  pluginDevelopmentMode?: boolean;
   retentionMaxAgeMs?: number;
   retentionMaxBytes?: number;
   retentionIntervalMs?: number;
@@ -477,6 +478,7 @@ export class CoreAcceptanceHarness {
     delete childEnvironment.STATE_HUB_RETENTION_MAX_AGE_MS;
     delete childEnvironment.STATE_HUB_RETENTION_MAX_BYTES;
     delete childEnvironment.STATE_HUB_RETENTION_INTERVAL_MS;
+    delete childEnvironment.STATE_HUB_PLUGIN_DEVELOPMENT_MODE;
     const child = spawn(process.execPath, ["--import", "tsx", entrypoint], {
       cwd: coreRoot,
       windowsHide: true,
@@ -488,6 +490,7 @@ export class CoreAcceptanceHarness {
         STATE_HUB_RUNTIME_DIR: this.paths.runtime,
         STATE_HUB_DB_PATH: this.paths.database,
         STATE_HUB_PORT: "0",
+        ...(this.options.pluginDevelopmentMode ? { STATE_HUB_PLUGIN_DEVELOPMENT_MODE: "true" } : {}),
         ...(this.options.deliveryLeaseMs
           ? { STATE_HUB_DELIVERY_LEASE_MS: String(this.options.deliveryLeaseMs) }
           : {}),
