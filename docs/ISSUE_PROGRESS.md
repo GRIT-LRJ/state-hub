@@ -15,7 +15,7 @@
 | #9 TTL 与投影 revision | PASS | 正确性基础 | 无 / #2 | 到期调度、回落、旧投影抑制 | 已完成 | PASS | PASS | 6d166a6、c9786f0 |
 | #10 配置生命周期 | TODO | High | #3 / #2 | 校验、revision、驱动热激活 | 是 | 待运行 | 待审查 | — |
 | #11 HTTP 目标授权 | PASS | High | 无 / #2 | 精确 origin 授权、DNS 全答案校验、固定 IP 连接 | 已完成 | pnpm verify PASS | Spec/Correctness/Security PASS | 50767f6 |
-| #12 Delivery 恢复 | PASS | 正确性基础 | 无 / #2 | lease、恢复、fencing | 已完成 | PASS | PASS | c9786f0 |
+| #12 Delivery 恢复 | PASS | 正确性基础 | 无 / #2 | lease、恢复、fencing、关闭等待在途投递 | 已完成 | pnpm verify PASS | Spec/Correctness/Integration PASS | c9786f0、c3680eb |
 | #13 Append-only 投递 | PASS | Medium | 无 / #2 | 批处理、重试、TTL、死信 | 已完成 | PASS | Spec/Correctness PASS | de8b4e6、cfe4d86、b5f47f4 |
 | #14 支持包脱敏 | PASS | High | 无 / #2 | 来源分类、预览与导出 | 已完成 | PASS | Spec/Correctness/Security PASS | 5c9992d |
 | #15 统一历史保留 | PASS | Medium | 无 / #2 | 保留预算、持久防重身份 | 已完成 | PASS | Spec/Correctness PASS | 4d3c178 |

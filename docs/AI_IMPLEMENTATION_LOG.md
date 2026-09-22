@@ -356,3 +356,9 @@ PASS；Spec PASS；Correctness architecture PASS；Security PASS；Crash/Recover
 ### Commit
 
 `20ed2e4`。
+
+## 跨 Issue 集成审查 — #11、#3、#4（关联 #12）
+
+检查了插件安装与信任、运行进程、驱动投递、配置与诊断的组合行为。真实 Core 的插件隔离、HTTP 目标授权、append-only 恢复、retention、支持包脱敏以及原有配置测试均在 `pnpm verify` 中通过。已知的完整配置契约校验仍归 #10，未当作本轮已完成。
+
+审查发现 Core 停止投递定时器后，在途驱动调用仍可能结束并写回；原关闭顺序会先关闭 SQLite。现在停止时不再领取下一任务，等待当前投递完成后才关闭数据库。新增测试把驱动调用停在半途，确认等待没有提前结束，释放驱动后仅完成这一条，下一条保持待处理。四项门禁重新通过；Critical 0、High 0；修复 commit `c3680eb`。
