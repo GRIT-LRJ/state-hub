@@ -569,3 +569,56 @@ PASS。
 ### Commit
 
 产品实现 `49e9745`；验收基础设施 `2665147`。
+
+
+## Issue #17 — 来源、凭据引用与 PushPlus 管理
+
+### 这张 Issue 要解决什么
+
+让用户在桌面里给一个来源创建或撤销独立的生产者 Token，把 PushPlus 密钥放进操作系统凭据库，并通过引用配置通知输出；使用者无需编辑数据库，也不需要把密钥写入配置文件。
+
+### 原来有什么问题
+
+Core 已能创建 Token 和投递 PushPlus，但桌面没有通用来源、凭据和 PushPlus 管理入口。桌面的 Rust keyring 依赖没有启用平台后端，保存操作实际落在进程内 mock store，Core 无法读取。凭据读取异常可能使投递失败细节包含不受信任文本；PushPlus 只检查 HTTP 状态，会把 HTTP 200 内的业务错误误记为成功。
+
+### 我改了什么
+
+新增桌面来源管理面板：列出来源定义和已有生产者，为选定来源创建或轮换最小权限 Token，只在本次操作显示明文，并可撤销。凭据面板保存、替换、查询存在性和删除引用，不提供读取密钥的界面命令。PushPlus 面板通过已有配置导出、草案预览和发布流程绑定生产者事件与凭据引用，同时保留其他输出。Core 新增仅管理员可用的生产者列表、撤销 API，列表不返回 Token 或 hash。
+
+Tauri 的 keyring 明确启用 Windows、macOS、Linux 系统后端，操作失败只返回固定错误码。PushPlus 在凭据缺失或读取失败时不发起 HTTP 请求；传输异常也只记录安全类别。按 [PushPlus 官方返回码](https://www.pushplus.plus/doc/guide/code.html)检查成功响应中的业务码：200 才算被服务端接受，500 可重试，令牌无效、账号受限等明确拒绝进入死信；异常响应按有限重试处理，不保存远端任意正文。配置校验允许带精确 origin 授权的本地测试端点，默认仍使用官方地址。
+
+### 为什么这样改
+
+Token 限定到单一生产者和来源，泄露后可以独立轮换或撤销。SQLite 只需持久化凭据引用，密钥从系统存储直接提供给驱动。缺失和故障路径在外部调用之前关闭，避免明文降级或误发送。PushPlus 的 HTTP 成功仅代表传输成功，官方业务码才表明请求被接受；固定错误类别既可观察也避免远端正文进入诊断数据。
+
+### 哪些文件发生变化
+
+Core 的 `server.ts`、`drivers.ts`、`builtins.ts`、`config-validation.ts` 及其凭据/真实进程验收测试；桌面的 `SourceManager.tsx`、`management.ts`、样式/文案/API 与 UI 测试；Tauri 的 `credentials.rs`、`lib.rs`、`Cargo.toml` 和 lockfile。测试依赖新增 React Testing Library 与 jsdom。
+
+### 数据库是否变化
+
+没有 schema、migration 或 backfill。生产者 Token 继续只以 hash 保存于已有 `producer_tokens` 表，新增撤销 API 写已有 `revoked_at`；配置草案和发布继续使用已有 revision 事务。凭据明文不进入 SQLite。
+
+### 外部行为是否变化
+
+管理员现在可以列出和撤销生产者，桌面可以管理来源、凭据引用与 PushPlus 输出。凭据操作若系统存储不可用会失败并显示通用提示；PushPlus 不会尝试明文文件。PushPlus 的 HTTP 200 若包含拒绝码不会再显示为成功投递。测试用的私网端点需要与配置一致的精确 origin 授权。
+
+### 风险
+
+轮换 Token 会立即使旧生产者令牌失效；撤销后要重新创建才能恢复输入。系统凭据库可用性依赖宿主账户与平台服务。真实 Windows 互通已验证；macOS/Linux 的实际系统凭据服务和安装包端到端验证留在 #23。Windows 上 Vitest 的独立 fork 曾一次在 `plugin-runtime` 文件启动时出现 `ERR_IPC_CHANNEL_CLOSED`；该文件单独通过，随后整套 acceptance 也通过，未出现产品断言失败，仍作为测试基础设施波动观察。
+
+### 测试
+
+桌面测试验证来源绑定 Token 的创建、一次性展示和撤销，密钥保存/删除不回显，读取或保存失败只显示安全提示，以及 PushPlus 预览和发布交互。Rust fake store 测试覆盖保存、替换、删除、缺失、读写失败；真实 Windows 测试创建一次性系统凭据，直接由 Core 使用的 Node keyring 客户端读取并清理。驱动测试用本地 HTTP 服务直接统计调用次数，覆盖凭据成功、缺失、读取异常、PushPlus 业务拒绝、可重试码和异常响应。真实 Core 验收用 OS 凭据成功发送恰好一次，并检查 SQLite、导出、支持包无明文；凭据缺失时 HTTP 请求数为零。最终 `pnpm test`、`pnpm test:acceptance`、`pnpm check`、`pnpm build` 全部通过；Core 单测 81/81、Core acceptance 16 文件 35/35、桌面单测 10/10、桌面 acceptance 2/2；`cargo test --lib` 5/5、`cargo fmt --check` 通过。
+
+### Reviewer 曾发现的问题
+
+真实跨语言凭据测试先发现桌面保存后 Core 读不到；追溯到 Rust keyring 未启用平台后端、默认为进程内 mock，现显式启用真实 OS 后端并把互通测试纳入默认 Rust 单测。再次审查对照官方 PushPlus 文档发现 HTTP 200 的业务失败会被误记成功，现解析有限的三位业务码并新增实际请求测试。验收门禁一次在独立 Vitest fork 的 IPC 阶段失败；单独复现该文件以及完整重跑都通过，记录为未确认根因的 Windows 测试进程波动，不将首次失败隐去。最终 Critical 0、High 0；Spec PASS、Correctness architecture PASS、Security PASS、Crash/Recovery PASS。
+
+### 最终状态
+
+PASS。
+
+### Commit
+
+产品实现 `735c148`。
