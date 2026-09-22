@@ -82,6 +82,22 @@ describe("StateHub vertical slice", () => {
     expect(service.snapshot().pendingDeliveries).toBe(0);
   });
 
+  it("keeps an append-only target installed until its pending delivery settles", async () => {
+    service.upsertClaim("codex", producerToken, "session-1", "status", {
+      value: { phase: "decision", color: "amber" },
+    });
+    const removal = service.createConfigDraft({ bindings: [], driverInstances: [] });
+    expect(() => service.publishConfig(removal.revision))
+      .toThrow("Settle append-only deliveries before changing their driver instance");
+    expect(service.exportConfig().driverInstances).toHaveLength(1);
+    expect((db.raw.prepare(
+      "SELECT count(*) AS count FROM deliveries WHERE action_kind = 'append-only' AND status = 'pending'",
+    ).get() as { count: number }).count).toBe(1);
+    await dispatcher.drain();
+    service.publishConfig(removal.revision);
+    expect(service.exportConfig().driverInstances).toHaveLength(0);
+  });
+
   it("does not repeat a transition-only claim effect for an identical value", () => {
     const value = { phase: "decision", color: "#ffaa00" };
     service.upsertClaim("codex", producerToken, "session-1", "status", { value });

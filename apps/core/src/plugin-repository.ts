@@ -2,7 +2,7 @@ import { createHash, createPublicKey } from "node:crypto";
 import AjvModule from "ajv";
 import addFormatsModule from "ajv-formats";
 import { verifyPlugin, type VerifiedPlugin } from "@state-hub/plugin-kit";
-import type { DriverDefinition, SourceDefinition } from "@state-hub/protocol";
+import type { Binding, DriverDefinition, SourceDefinition } from "@state-hub/protocol";
 import { builtinCatalog } from "./builtins.js";
 import type { StateHubDatabase } from "./database.js";
 
@@ -23,6 +23,23 @@ export class PluginInstallError extends Error {
   constructor(readonly code: string, message: string, readonly statusCode = 400) {
     super(message);
   }
+}
+
+export interface PluginDependencies {
+  driverInstances: string[];
+  bindings: string[];
+  producers: string[];
+  deliveries: string[];
+}
+
+export class PluginDependencyError extends PluginInstallError {
+  constructor(readonly dependencies: PluginDependencies) {
+    super("PLUGIN_IN_USE", "Resolve the listed plugin dependencies and pending deliveries before uninstalling", 409);
+  }
+}
+
+function dependencyHash(value: string): string {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -212,12 +229,76 @@ export class PluginRepository {
     ).all(this.developmentMode ? 1 : 0) as Array<{ id: string }>).map((row) => row.id);
   }
 
+  hasInstalledDriverType(driverType: string): boolean {
+    const rows = this.db.raw.prepare(
+      "SELECT driver_definitions_json FROM plugin_packages WHERE active = 1 AND (signed = 1 OR ? = 1)",
+    ).all(this.developmentMode ? 1 : 0) as Array<{ driver_definitions_json: string }>;
+    return rows.some((row) => (JSON.parse(row.driver_definitions_json) as DriverDefinition[])
+      .some((definition) => definition.id === driverType));
+  }
+
   packageForDriver(driverType: string): string | undefined {
     const rows = this.db.raw.prepare(
       "SELECT id, driver_definitions_json FROM plugin_packages WHERE active = 1 AND enabled = 1 AND (signed = 1 OR ? = 1)",
     ).all(this.developmentMode ? 1 : 0) as Array<{ id: string; driver_definitions_json: string }>;
     return rows.find((row) =>
       (JSON.parse(row.driver_definitions_json) as DriverDefinition[]).some((definition) => definition.id === driverType))?.id;
+  }
+
+  dependencies(id: string): PluginDependencies {
+    const row = this.db.raw.prepare(
+      "SELECT source_definitions_json, driver_definitions_json FROM plugin_packages WHERE id = ? AND active = 1",
+    ).get(id) as { source_definitions_json: string; driver_definitions_json: string } | undefined;
+    if (!row) throw new PluginInstallError("PLUGIN_NOT_FOUND", "Plugin package was not found", 404);
+    const driverTypes = new Set((JSON.parse(row.driver_definitions_json) as DriverDefinition[])
+      .map((definition) => definition.id));
+    const sourceTypes = new Set((JSON.parse(row.source_definitions_json) as SourceDefinition[])
+      .map((definition) => definition.id));
+    const instances = (this.db.raw.prepare("SELECT id, driver_type FROM driver_instances")
+      .all() as Array<{ id: string; driver_type: string }>)
+      .filter((instance) => driverTypes.has(instance.driver_type));
+    const instanceIds = new Set(instances.map((instance) => instance.id));
+    const bindings = (this.db.raw.prepare("SELECT id, payload_json FROM bindings")
+      .all() as Array<{ id: string; payload_json: string }>)
+      .filter((binding) => instanceIds.has(
+        (JSON.parse(binding.payload_json) as Binding).target.driverInstanceId));
+    const producers = (this.db.raw.prepare(
+      "SELECT producer_id, source_definition_id FROM producer_tokens WHERE revoked_at IS NULL",
+    ).all() as Array<{ producer_id: string; source_definition_id: string | null }>)
+      .filter((producer) => producer.source_definition_id !== null &&
+        sourceTypes.has(producer.source_definition_id));
+    const historicalIds = new Set(instanceIds);
+    const revisions = this.db.raw.prepare(
+      "SELECT config_json FROM config_revisions WHERE status IN ('published', 'superseded')",
+    ).all() as Array<{ config_json: string }>;
+    for (const revision of revisions) {
+      const config = JSON.parse(revision.config_json) as {
+        driverInstances: Array<{ id: string; driverType: string }>;
+      };
+      for (const instance of config.driverInstances) {
+        if (driverTypes.has(instance.driverType)) historicalIds.add(instance.id);
+      }
+    }
+    const deliveries = (this.db.raw.prepare(
+      "SELECT id, driver_instance_id FROM deliveries WHERE status IN ('pending', 'leased')",
+    ).all() as Array<{ id: string; driver_instance_id: string }>)
+      .filter((delivery) => historicalIds.has(delivery.driver_instance_id));
+    return {
+      driverInstances: instances.map((instance) => dependencyHash(instance.id)).sort(),
+      bindings: bindings.map((binding) => dependencyHash(binding.id)).sort(),
+      producers: producers.map((producer) => dependencyHash(producer.producer_id)).sort(),
+      deliveries: deliveries.map((delivery) => dependencyHash(delivery.id)).sort(),
+    };
+  }
+
+  uninstall(id: string): void {
+    this.db.transaction(() => {
+      const dependencies = this.dependencies(id);
+      if (dependencies.driverInstances.length || dependencies.bindings.length || dependencies.producers.length || dependencies.deliveries.length) {
+        throw new PluginDependencyError(dependencies);
+      }
+      this.db.raw.prepare("DELETE FROM plugin_packages WHERE id = ?").run(id);
+    });
   }
 
   driverInstanceIds(id: string): string[] {

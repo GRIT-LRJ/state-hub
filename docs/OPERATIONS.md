@@ -60,7 +60,7 @@ Hook 是短同步调用：先把命令原子写入 spool，再尝试 800ms loopb
 
 管理 API 使用 Tauri 注入的临时管理会话。先向 `POST /api/v1/admin/plugins/trusted-publishers` 提交 publisher ID 和 Ed25519 PEM 公钥，再将确定性的 `.statehub-plugin` 原始字节以 `application/vnd.statehub.plugin` 发送到 `POST /api/v1/admin/plugins/install`。`GET /api/v1/admin/plugins` 只列安装元数据与包哈希；`GET /api/v1/admin/catalog` 立即显示安装后的来源、驱动定义和动作契约。安装记录与信任库保存在 SQLite，不保存私钥或管理令牌。
 
-正式模式拒绝未签名包。仅在受控开发运行中设置 `STATE_HUB_PLUGIN_DEVELOPMENT_MODE=true` 才允许安装并使用未签名定义；恢复正式模式后这些定义不会进入 Catalog 或来源校验。安装会检查全部 checksum、签名、许可证、当前平台入口和 JSON Schema，失败不改变 Catalog。插件安装后，Core 为每个启用的包启动一个独立进程；`GET /api/v1/admin/plugins/runtime` 返回包级运行状态、PID 与安全原因码。`POST /api/v1/admin/plugins/:id/disable` 停止进程并从可用 Catalog 移除定义，`POST /api/v1/admin/plugins/:id/enable` 重新验包、握手、健康检查后恢复。插件超时、异常退出或协议错误不会直接使 Core 退出；下一次相关投递可尝试重建进程。重新启用成功会向该插件驱动补发当前 stateful 投影，不补发历史 queued-effect。插件升级和依赖感知卸载分别由后续 Issue 完成。
+正式模式拒绝未签名包。仅在受控开发运行中设置 `STATE_HUB_PLUGIN_DEVELOPMENT_MODE=true` 才允许安装并使用未签名定义；恢复正式模式后这些定义不会进入 Catalog 或来源校验。安装会检查全部 checksum、签名、许可证、当前平台入口和 JSON Schema，失败不改变 Catalog。插件安装后，Core 为每个启用的包启动一个独立进程；`GET /api/v1/admin/plugins/runtime` 返回包级运行状态、PID 与安全原因码。`POST /api/v1/admin/plugins/:id/disable` 停止进程并从可用 Catalog 移除定义，`POST /api/v1/admin/plugins/:id/enable` 重新验包、握手、健康检查后恢复。插件超时、异常退出或协议错误不会直接使 Core 退出；下一次相关投递可尝试重建进程。重新启用成功会向该插件驱动补发当前 stateful 投影，不补发历史 queued-effect。插件升级由后续 Issue 完成。卸载前可查询 `GET /api/v1/admin/plugins/:id/dependencies`；`DELETE /api/v1/admin/plugins/:id` 仅在驱动实例、绑定、来源注册和待处理投递均解除后成功。拒绝时返回 `PLUGIN_IN_USE` 与按类别列出的 SHA-256 身份，避免在错误正文里回显用户填写的名称；管理界面可与当前配置身份比对。可通过发布移除实例/绑定的新配置、将来源重新注册到其他定义，并等待未完成投递结清。卸载与启用、禁用、安装写操作串行执行；中途崩溃在数据库删除前会保留包，重启后可重试。已有待处理 append-only 投递时，配置发布会拒绝移除或改变其驱动实例。
 
 ## VK87
 

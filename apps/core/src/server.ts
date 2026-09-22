@@ -6,7 +6,7 @@ import type { DriverRegistry } from "./drivers.js";
 import type { DeliveryDispatcher } from "./dispatcher.js";
 import type { HubEventBus } from "./events.js";
 import { HubError, type PublishedConfig, type SnapshotClaim, type StateHubService } from "./service.js";
-import { PluginInstallError, PluginRepository } from "./plugin-repository.js";
+import { PluginDependencyError, PluginInstallError, PluginRepository } from "./plugin-repository.js";
 import type { PluginRuntime } from "./plugin-runtime.js";
 
 interface ServerOptions {
@@ -46,6 +46,15 @@ export function createServer(options: ServerOptions): FastifyInstance {
     done(null, body);
   });
   const rate = new Map<string, { window: number; count: number }>();
+  let pluginMutationTail = Promise.resolve();
+  const mutatePlugin = async <T>(work: () => Promise<T>): Promise<T> => {
+    const previous = pluginMutationTail;
+    let release: () => void = () => undefined;
+    pluginMutationTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try { return await work(); }
+    finally { release(); }
+  };
 
   const producerPolicy = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     if (request.headers.origin) {
@@ -89,6 +98,12 @@ export function createServer(options: ServerOptions): FastifyInstance {
   };
 
   app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof PluginDependencyError) {
+      void reply.code(error.statusCode).send({
+        error: { code: error.code, message: error.message, dependencies: error.dependencies },
+      });
+      return;
+    }
     if (error instanceof PluginInstallError) {
       void reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } });
       return;
@@ -234,32 +249,60 @@ export function createServer(options: ServerOptions): FastifyInstance {
   app.get("/api/v1/admin/plugins", { preHandler: adminAuth }, async () => ({ plugins: plugins.installed() }));
   app.get("/api/v1/admin/plugins/runtime", { preHandler: adminAuth }, async () =>
     ({ plugins: options.pluginRuntime?.statuses() ?? [] }));
-
-  app.post("/api/v1/admin/plugins/:id/disable", { preHandler: adminAuth }, async (request) => {
+  app.get("/api/v1/admin/plugins/:id/dependencies", { preHandler: adminAuth }, async (request) => {
     const { id } = request.params as { id: string };
-    if (!plugins.installed().some((plugin) => plugin.id === id)) {
-      throw new PluginInstallError("PLUGIN_NOT_FOUND", "Plugin package was not found", 404);
-    }
-    await options.pluginRuntime?.stop(id);
-    plugins.setEnabled(id, false);
-    options.drivers.invalidate();
-    return { id, enabled: false };
+    return { id, dependencies: plugins.dependencies(id) };
   });
 
-  app.post("/api/v1/admin/plugins/:id/enable", { preHandler: adminAuth }, async (request) => {
-    const { id } = request.params as { id: string };
-    const wasRunning = options.pluginRuntime?.statuses().some((entry) =>
-      entry.id === id && entry.status === "running");
-    plugins.setEnabled(id, true);
-    const runtime = options.pluginRuntime ? await options.pluginRuntime.start(id) : undefined;
-    options.drivers.invalidate();
-    if (runtime?.status === "running" && !wasRunning) {
-      for (const instanceId of plugins.driverInstanceIds(id)) {
-        options.dispatcher.recoverCurrentStateful(instanceId);
+  app.delete("/api/v1/admin/plugins/:id", { preHandler: adminAuth }, async (request) =>
+    await mutatePlugin(async () => {
+      const { id } = request.params as { id: string };
+      const installed = plugins.installed().find((plugin) => plugin.id === id);
+      if (!installed) throw new PluginInstallError("PLUGIN_NOT_FOUND", "Plugin package was not found", 404);
+      const dependencies = plugins.dependencies(id);
+      if (dependencies.driverInstances.length || dependencies.bindings.length ||
+        dependencies.producers.length || dependencies.deliveries.length) {
+        throw new PluginDependencyError(dependencies);
       }
-    }
-    return { id, enabled: true, ...(runtime ? { runtime } : {}) };
-  });
+      await options.pluginRuntime?.stop(id);
+      try {
+        plugins.uninstall(id);
+      } catch (error) {
+        if (installed.enabled) await options.pluginRuntime?.start(id);
+        throw error;
+      }
+      options.drivers.invalidate();
+      return { id, removed: true };
+    }));
+
+
+  app.post("/api/v1/admin/plugins/:id/disable", { preHandler: adminAuth }, async (request) =>
+    await mutatePlugin(async () => {
+      const { id } = request.params as { id: string };
+      if (!plugins.installed().some((plugin) => plugin.id === id)) {
+        throw new PluginInstallError("PLUGIN_NOT_FOUND", "Plugin package was not found", 404);
+      }
+      await options.pluginRuntime?.stop(id);
+      plugins.setEnabled(id, false);
+      options.drivers.invalidate();
+      return { id, enabled: false };
+    }));
+
+  app.post("/api/v1/admin/plugins/:id/enable", { preHandler: adminAuth }, async (request) =>
+    await mutatePlugin(async () => {
+      const { id } = request.params as { id: string };
+      const wasRunning = options.pluginRuntime?.statuses().some((entry) =>
+        entry.id === id && entry.status === "running");
+      plugins.setEnabled(id, true);
+      const runtime = options.pluginRuntime ? await options.pluginRuntime.start(id) : undefined;
+      options.drivers.invalidate();
+      if (runtime?.status === "running" && !wasRunning) {
+        for (const instanceId of plugins.driverInstanceIds(id)) {
+          options.dispatcher.recoverCurrentStateful(instanceId);
+        }
+      }
+      return { id, enabled: true, ...(runtime ? { runtime } : {}) };
+    }));
 
   app.get("/api/v1/admin/plugins/trusted-publishers", { preHandler: adminAuth }, async () =>
     ({ publishers: plugins.trustedPublishers() }));
@@ -273,14 +316,14 @@ export function createServer(options: ServerOptions): FastifyInstance {
   });
 
   app.post("/api/v1/admin/plugins/install", { onRequest: adminAuth, bodyLimit: 128 * 1024 * 1024 },
-    async (request, reply) => {
+    async (request, reply) => await mutatePlugin(async () => {
       if (request.headers["content-type"] !== "application/vnd.statehub.plugin" || !Buffer.isBuffer(request.body)) {
         throw new PluginInstallError("INVALID_PLUGIN_UPLOAD", "A binary plugin package is required");
       }
       const installed = plugins.install(request.body);
       const runtime = options.pluginRuntime ? await options.pluginRuntime.start(installed.id) : undefined;
       return await reply.code(201).send({ ...installed, ...(runtime ? { runtime } : {}) });
-    });
+    }));
 
   app.post("/api/v1/admin/producers", { preHandler: adminAuth }, async (request, reply) => {
     const body = request.body as { producerId?: string; sourceDefinitionId?: string };

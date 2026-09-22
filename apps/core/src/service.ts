@@ -638,6 +638,24 @@ export class StateHubService {
       if (!draft || draft.status !== "draft") throw new HubError("CONFIG_DRAFT_NOT_FOUND", "Draft not found", 404);
       const config = JSON.parse(draft.config_json) as PublishedConfig;
       this.validateConfig(config);
+      const replacements = new Map(config.driverInstances.map((instance) => [instance.id, instance]));
+      const currentInstances = this.db.raw.prepare(
+        "SELECT id, driver_type, enabled FROM driver_instances",
+      ).all() as Array<{ id: string; driver_type: string; enabled: number }>;
+      for (const current of currentInstances) {
+        const replacement = replacements.get(current.id);
+        const changed = !replacement || current.driver_type !== replacement.driverType ||
+          current.enabled !== (replacement.enabled ? 1 : 0);
+        if (!changed) continue;
+        const unfinished = this.db.raw.prepare(
+          `SELECT 1 FROM deliveries WHERE driver_instance_id = ? AND action_kind = 'append-only'
+             AND status IN ('pending', 'leased') LIMIT 1`,
+        ).get(current.id);
+        if (unfinished) {
+          throw new HubError("CONFIG_PENDING_DELIVERIES",
+            "Settle append-only deliveries before changing their driver instance", 409);
+        }
+      }
       this.db.raw.prepare("DELETE FROM bindings").run();
       this.db.raw.prepare("DELETE FROM driver_instances").run();
       for (const instance of config.driverInstances) {
@@ -1096,6 +1114,10 @@ export class StateHubService {
     for (const instance of config.driverInstances) {
       if (instanceIds.has(instance.id)) throw new HubError("DUPLICATE_DRIVER_INSTANCE", instance.id);
       instanceIds.add(instance.id);
+      if (!["virtual", "http", "pushplus", "vk87"].includes(instance.driverType) &&
+        !this.plugins.hasInstalledDriverType(instance.driverType)) {
+        throw new HubError("UNKNOWN_DRIVER_TYPE", "Driver type is not installed");
+      }
       if (instance.physicalResourceKey) {
         if (physicalKeys.has(instance.physicalResourceKey)) {
           throw new HubError("PHYSICAL_RESOURCE_CONFLICT", instance.physicalResourceKey, 409);

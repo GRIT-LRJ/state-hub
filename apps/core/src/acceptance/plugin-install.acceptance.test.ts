@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 import { CoreAcceptanceHarness } from "./harness.js";
 import { StateHubDatabase } from "../database.js";
 import { PluginRepository } from "../plugin-repository.js";
+import { HubEventBus } from "../events.js";
+import { StateHubService } from "../service.js";
 import { validateClaimValue } from "../schema-validation.js";
 
 function fixture(claimSchema: Record<string, unknown> = {
@@ -141,6 +143,13 @@ describe("plugin installation through the real Core management API", () => {
         expect(productionPolicy.catalog().sourceDefinitions.some((source) => source.id === "community.sample.source")).toBe(false);
         expect(validateClaimValue(reopened, "development-producer", "status", { phase: "ready" }, productionPolicy))
           .toMatch(/not declared/u);
+        const productionService = new StateHubService(reopened, new HubEventBus(), productionPolicy);
+        expect(() => productionService.createConfigDraft({
+          bindings: [],
+          driverInstances: [{
+            id: "development-driver", driverType: "community.sample.driver", enabled: true, config: {},
+          }],
+        })).toThrow("Driver type is not installed");
       } finally { reopened.close(); }
       const invalid = fixture({ type: "not-a-json-schema-type" });
       try {
