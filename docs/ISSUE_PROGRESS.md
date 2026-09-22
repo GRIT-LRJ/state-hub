@@ -6,14 +6,14 @@
 |---|---|---|---|---|---|---|---|---|
 | #1 总规格 | IN PROGRESS | 总验收 | 所有子 Issue | 全系统最终黑盒/白盒验收 | 否，等待子项 | 待最终审查 | 待最终审查 | — |
 | #2 Core 验收 Harness | PASS | 基础 | 无 / 无 | 真实 Core HTTP/SSE 测试基础 | 已完成 | PASS | PASS | e99f6cc |
-| #3 插件安装、信任与 Catalog | TODO | Critical | 无 / #2 | 插件安装、信任库、动态定义 | 是 | 待运行 | 待审查 | — |
-| #4 独立插件进程 | TODO | Critical | #3 / #2 | JSON-RPC、子进程与隔离 | 否，等待 #3 | 待运行 | 待审查 | — |
+| #3 插件安装、信任与 Catalog | PASS | Critical | 无 / #2 | 持久验包、publisher 信任、动态定义与来源校验 | 已完成 | pnpm verify PASS | Spec/Correctness/Security PASS | c42694a |
+| #4 独立插件进程 | TODO | Critical | #3 / #2 | JSON-RPC、子进程与隔离 | 是 | 待运行 | 待审查 | — |
 | #5 插件旁路升级 | TODO | Critical | #4 / #2 | 升级校验与原子激活 | 否，等待 #4 | 待运行 | 待审查 | — |
-| #6 插件安全卸载 | TODO | Critical | #3 / #2 | 依赖检查与卸载 | 否，等待 #3 | 待运行 | 待审查 | — |
+| #6 插件安全卸载 | TODO | Critical | #3 / #2 | 依赖检查与卸载 | 是 | 待运行 | 待审查 | — |
 | #7 ClaimIdentity 防碰撞 | PASS | High | 无 / #2 | 确认、转换、贡献者、资源身份 | 已完成 | PASS | Spec/Correctness PASS | ecd9ef6、b5f47f4 |
 | #8 生产者事务边界 | PASS | 正确性基础 | 无 / #2 | 命令、账本、投影、outbox 原子提交 | 已完成 | PASS | PASS | a417699 |
 | #9 TTL 与投影 revision | PASS | 正确性基础 | 无 / #2 | 到期调度、回落、旧投影抑制 | 已完成 | PASS | PASS | 6d166a6、c9786f0 |
-| #10 配置生命周期 | TODO | High | #3 / #2 | 校验、revision、驱动热激活 | 否，等待 #3 | 待运行 | 待审查 | — |
+| #10 配置生命周期 | TODO | High | #3 / #2 | 校验、revision、驱动热激活 | 是 | 待运行 | 待审查 | — |
 | #11 HTTP 目标授权 | PASS | High | 无 / #2 | 精确 origin 授权、DNS 全答案校验、固定 IP 连接 | 已完成 | pnpm verify PASS | Spec/Correctness/Security PASS | 50767f6 |
 | #12 Delivery 恢复 | PASS | 正确性基础 | 无 / #2 | lease、恢复、fencing | 已完成 | PASS | PASS | c9786f0 |
 | #13 Append-only 投递 | PASS | Medium | 无 / #2 | 批处理、重试、TTL、死信 | 已完成 | PASS | Spec/Correctness PASS | de8b4e6、cfe4d86、b5f47f4 |

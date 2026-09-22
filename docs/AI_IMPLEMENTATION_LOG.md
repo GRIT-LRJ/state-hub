@@ -256,3 +256,53 @@ PASS；Spec PASS；Correctness architecture PASS；Security PASS；Crash/Recover
 ### Commit
 
 `50767f6`。
+
+## Issue #3 — 插件安装、信任与动态 Catalog
+
+### 这张 Issue 要解决什么
+
+让用户明确信任的社区插件能被 Core 安装，其来源、驱动和动作定义可供管理界面查询及后续配置使用。
+
+### 原来有什么问题
+
+插件工具可以打包和验签，但 Core 没有安装记录或 publisher 信任库。管理 Catalog 只返回内置定义，生产者也无法使用社区来源的 JSON Schema。失败包是否会留下部分状态没有可验证的边界。
+
+### 我改了什么
+
+Core 新增持久 publisher 公钥库和插件包记录。管理 API 可以登记 Ed25519 公钥、上传原始插件包、查询安装元数据与动态 Catalog。安装前验证签名、checksum、协议版本、许可证、文件路径、平台入口及定义 JSON Schema；验证完整通过后才用一个 SQLite 事务保存包和版本化定义。社区来源立即进入生产者值校验。正式模式隐藏未签名定义，开发模式必须显式开启。插件 Kit 还限制解压容量、符号链接、ZIP 路径穿越和大小写碰撞。
+
+### 为什么这样改
+
+信任决定和包内容必须先完整验证，才允许定义改变 Core 的行为。把包和定义放在同一个数据库事务中，崩溃或拒绝安装时不会出现半安装记录。动态 Catalog 是后续配置校验、插件执行、升级与卸载共同依赖的接口。
+
+### 哪些文件发生变化
+
+`packages/plugin-kit/src/index.ts`、`apps/core/src/plugin-repository.ts`、`database.ts`、`server.ts`、`schema-validation.ts`、`service.ts`、启动配置与验收 Harness、依赖锁文件、插件 Kit 契约测试、真实 Core 安装验收，以及架构/运行手册。
+
+### 数据库是否变化
+
+新增 `plugin_publishers` 和 `plugin_packages`；旧数据库通过 `CREATE TABLE IF NOT EXISTS` 自动增加。包字节、哈希、manifest 与定义同事务保存；安装元数据不含私钥、管理令牌或生产者 token。
+
+### 外部行为是否变化
+
+新增管理信任、二进制安装、插件列表 API；Catalog 从静态内置列表变为内置加已准许插件。来源注册和 claim 校验可使用安装的 SourceDefinition。环境变量 `STATE_HUB_PLUGIN_DEVELOPMENT_MODE=true` 显式允许未签名定义，仅限开发模式。插件子进程执行属于后续 Issue。
+
+### 风险
+
+已授权管理员上传的插件包会增加 SQLite 占用；上传上限为 128 MiB。开发模式安装的未签名包在正式模式保留安装记录但不进入 Catalog，因此对应来源需回到开发模式或后续替换为可信签名包才能继续使用。
+
+### 测试
+
+插件 Kit 测试验证同一来源两次打包字节一致，拒绝未知 publisher、篡改 checksum、目录穿越、Windows 保留路径、缺许可证与入口，无签名仅开发模式通过。真实 Core API 验收覆盖管理鉴权、信任登记、动态定义和 action contract、生产者 schema 拒绝、重启后持久、坏包不留半成品、错误平台入口及正式/开发模式切换。`pnpm verify` 四项门禁通过。
+
+### Reviewer 曾发现的问题
+
+发现 ZIP 目录项和大小写路径别名可能绕过最初的路径检查，已在解压过滤阶段拒绝。发现开发模式安装的未签名包在正式模式重启后可能仍被读取，已统一 Catalog 与生产者校验的模式策略。发现跨数据库或插件复用 JSON Schema `$id` 可能污染全局编译缓存，已按数据库与实际 schema 隔离编译。
+
+### 最终状态
+
+PASS；Spec PASS；Correctness architecture PASS；Security PASS；Crash/Recovery PASS；Critical 0；High 0。
+
+### Commit
+
+`c42694a`。
