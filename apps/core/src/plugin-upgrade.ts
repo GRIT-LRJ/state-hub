@@ -32,6 +32,16 @@ export function migratedUpgradeConfig(
   const ownedTypes = new Set(candidate.oldDriverDefinitionIds);
   const owned = current.driverInstances.filter((instance) => ownedTypes.has(instance.driverType));
   const ownedIds = new Set(owned.map((instance) => instance.id));
+  const historicalIds = new Set(ownedIds);
+  const revisions = db.raw.prepare(
+    "SELECT config_json FROM config_revisions WHERE status IN ('published', 'superseded')",
+  ).all() as Array<{ config_json: string }>;
+  for (const revision of revisions) {
+    const config = JSON.parse(revision.config_json) as PublishedConfig;
+    for (const instance of config.driverInstances) {
+      if (ownedTypes.has(instance.driverType)) historicalIds.add(instance.id);
+    }
+  }
   if (!record(migration) || !Array.isArray(migration.driverInstances) ||
     migration.driverInstances.length !== owned.length) incompatible("PLUGIN_MIGRATION_RESULT");
   const migrated = migration as unknown as PluginConfigMigrationResult;
@@ -86,7 +96,9 @@ export function migratedUpgradeConfig(
   ).all() as Array<{ driver_instance_id: string; action_kind: string; action_json: string | null }>;
   const byId = new Map(next.driverInstances.map((instance) => [instance.id, instance]));
   for (const delivery of pending) {
-    if (!ownedIds.has(delivery.driver_instance_id) || delivery.action_json === null) continue;
+    if (!historicalIds.has(delivery.driver_instance_id)) continue;
+    if (!ownedIds.has(delivery.driver_instance_id)) incompatible("PLUGIN_DELIVERY_INCOMPATIBLE");
+    if (delivery.action_json === null) continue;
     const type = byId.get(delivery.driver_instance_id)?.driverType;
     const action = JSON.parse(delivery.action_json) as { name?: string; params?: unknown };
     const contract = definitions.get(type ?? "")?.actions[action.name ?? ""];

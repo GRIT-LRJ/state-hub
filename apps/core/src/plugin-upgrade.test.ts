@@ -39,6 +39,29 @@ describe("plugin upgrade compatibility", () => {
     } finally { db.close(); }
   });
 
+  it("protects an unfinished delivery referenced only by a superseded config", () => {
+    const db = new StateHubDatabase(":memory:");
+    try {
+      const old: PublishedConfig = { bindings: [], driverInstances: [
+        { id: "retired", driverType: driver.id, enabled: true, config: {} },
+      ] };
+      db.raw.prepare(
+        `INSERT INTO config_revisions(revision, status, config_json, impact_json, created_at)
+         VALUES (1, 'superseded', ?, '{}', ?)`,
+      ).run(JSON.stringify(old), new Date().toISOString());
+      db.raw.prepare(
+        `INSERT INTO deliveries(id, driver_instance_id, resource_channel, action_kind,
+           action_json, status, available_at, created_at)
+         VALUES ('old-delivery', 'retired', 'feed', 'append-only', ?, 'pending', ?, ?)`,
+      ).run(JSON.stringify({ name: "emit", params: {} }), new Date().toISOString(), new Date().toISOString());
+      const current: PublishedConfig = { bindings: [], driverInstances: [] };
+      expect(() => migratedUpgradeConfig(db, new PluginRepository(db), candidate(), current,
+        { driverInstances: [] })).toThrowError(
+        expect.objectContaining({ code: "PLUGIN_DELIVERY_INCOMPATIBLE" }),
+      );
+    } finally { db.close(); }
+  });
+
   it("rejects a migration result that tries to rewrite another plugin's instance", () => {
     const db = new StateHubDatabase(":memory:");
     try {
