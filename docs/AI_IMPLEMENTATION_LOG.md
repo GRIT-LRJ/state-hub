@@ -42,7 +42,7 @@ dispatcher 在领取待处理或过期 lease 时先检查已发起次数。耗�
 
 ### Reviewer 曾发现的问题
 
-发现最后一次调用后崩溃可突破预算，已在领取事务中预先封顶，并补黑盒验收。
+发现最后一次调用后崩溃可突破预算，已在领取事务中预先封顶，并补黑盒验收。跨 Issue 集成审查又发现不同绑定/action 的旧批次键可碰撞，已改为元组身份，真实 Core 测试确认两次独立驱动调用。
 
 ### 最终状态
 
@@ -50,7 +50,7 @@ PASS；Spec PASS；Correctness architecture PASS；Critical 0；High 0。`pnpm v
 
 ### Commit
 
-`de8b4e6`（本轮前批处理）、`cfe4d86`（本轮恢复边界）。
+`de8b4e6`（本轮前批处理）、`cfe4d86`（本轮恢复边界）、`b5f47f4`（集成碰撞修复）。
 
 ## Issue #14 — 支持包 Claim 派生数据脱敏
 
@@ -181,7 +181,7 @@ JSON 数组编码对合法字符串元组是一一对应的，精确 SQL 键删�
 
 ### 数据库是否变化
 
-没有 schema 或 backfill。本项目当前未要求旧版本正式用户数据迁移；旧格式的确认/transition 行不会与新格式身份混用。
+没有新增 schema。ClaimIdentity 旧格式确认/transition 行不回填，符合本 Issue 不要求正式数据迁移的范围；集成审查发现资源键同类碰撞后，启动时在单个 SQLite 事务中回填旧投影 resource_key，并保留 revision。
 
 ### 外部行为是否变化
 
@@ -197,7 +197,7 @@ JSON 数组编码对合法字符串元组是一一对应的，精确 SQL 键删�
 
 ### Reviewer 曾发现的问题
 
-发现快照校验仍使用裸拼接，以及 SQL `LIKE` 的下划线通配符会跨 producer 清理。两处已一并改为精确元组身份和精确删除。
+发现快照校验仍使用裸拼接，以及 SQL `LIKE` 的下划线通配符会跨 producer 清理。两处已改为精确身份和精确删除。跨 Issue 集成审查进一步确认资源键也能碰撞，已修复并验收两个独立资源的投影及驱动调用。
 
 ### 最终状态
 
@@ -205,4 +205,4 @@ PASS；Spec PASS；Correctness architecture PASS；Critical 0；High 0。`pnpm v
 
 ### Commit
 
-`ecd9ef6`。
+`ecd9ef6`、`b5f47f4`（跨 Issue 集成修复）。
