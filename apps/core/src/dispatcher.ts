@@ -58,6 +58,8 @@ const DEFAULT_RETRY_MAX_MS = 30_000;
 export class DeliveryDispatcher {
   #timer: NodeJS.Timeout | undefined;
   #running = false;
+  #stopping = false;
+  readonly #idleWaiters: Array<() => void> = [];
   readonly #leaseDurationMs: number;
   readonly #now: () => Date;
   readonly #appendOnlyMaxAttempts: number;
@@ -154,27 +156,35 @@ export class DeliveryDispatcher {
 
   start(): void {
     if (this.#timer) return;
+    this.#stopping = false;
     this.#timer = setInterval(() => void this.drain(), 50);
     this.#timer.unref();
     void this.drain();
   }
 
   stop(): void {
+    this.#stopping = true;
     if (this.#timer) clearInterval(this.#timer);
     this.#timer = undefined;
   }
 
+  async waitForIdle(): Promise<void> {
+    if (!this.#running) return;
+    await new Promise<void>((resolve) => this.#idleWaiters.push(resolve));
+  }
+
   async drain(): Promise<void> {
-    if (this.#running) return;
+    if (this.#running || this.#stopping) return;
     this.#running = true;
     try {
-      for (let index = 0; index < 100; index += 1) {
+      for (let index = 0; index < 100 && !this.#stopping; index += 1) {
         const deliveries = this.claimNext();
         if (!deliveries) break;
         await this.execute(deliveries);
       }
     } finally {
       this.#running = false;
+      for (const resolve of this.#idleWaiters.splice(0)) resolve();
     }
   }
 

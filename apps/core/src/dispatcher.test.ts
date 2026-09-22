@@ -82,6 +82,44 @@ describe("append-only dispatcher", () => {
     db.close();
   });
 
+  it("waits for an in-flight delivery and does not claim another after stopping", async () => {
+    const nowMs = Date.parse("2026-01-01T00:00:00.000Z");
+    let started: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => { started = resolve; });
+    let complete: (result: DriverActionResult) => void = () => undefined;
+    const requests: DriverActionRequest[] = [];
+    const driver: Driver = {
+      execute: async (request) => {
+        requests.push(request);
+        started();
+        return await new Promise<DriverActionResult>((resolve) => { complete = resolve; });
+      },
+    };
+    const dispatcher = new DeliveryDispatcher(db, { get: () => driver }, events, {
+      now: () => new Date(nowMs),
+    });
+    for (const id of ["first", "second"]) {
+      insertAppendDelivery(db, {
+        id, availableAt: new Date(nowMs).toISOString(),
+        deadlineAt: new Date(nowMs + 60_000).toISOString(),
+      });
+    }
+    const drain = dispatcher.drain();
+    await entered;
+    dispatcher.stop();
+    let idle = false;
+    const waiting = dispatcher.waitForIdle().then(() => { idle = true; });
+    await Promise.resolve();
+    expect(idle).toBe(false);
+    complete({ status: "delivered" });
+    await Promise.all([drain, waiting]);
+    expect(requests).toHaveLength(1);
+    expect(db.raw.prepare("SELECT status FROM deliveries WHERE id = 'first'").get())
+      .toMatchObject({ status: "delivered" });
+    expect(db.raw.prepare("SELECT status FROM deliveries WHERE id = 'second'").get())
+      .toMatchObject({ status: "pending" });
+  });
+
   it("uses bounded exponential backoff and dead-letters after the retry budget", async () => {
     let nowMs = Date.parse("2026-01-01T00:00:00.000Z");
     const driver = new ProgrammableDriver(() => ({ status: "retry", detail: "temporary outage" }));

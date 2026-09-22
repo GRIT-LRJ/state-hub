@@ -95,8 +95,12 @@ const stop = async (): Promise<void> => {
   try {
     await app.close();
   } finally {
-    await pluginRuntime.stopAll();
-    db.close();
+    try {
+      await pluginRuntime.stopAll();
+    } finally {
+      try { await dispatcher.waitForIdle(); }
+      finally { db.close(); }
+    }
   }
   try {
     unlinkSync(config.discoveryPath);
