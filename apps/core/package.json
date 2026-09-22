@@ -14,7 +14,7 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --exclude \"src/acceptance/**\"",
-    "test:acceptance": "vitest run src/acceptance",
+    "test:acceptance": "vitest run src/acceptance --maxWorkers=2",
     "test:performance": "vitest run src/performance.test.ts",
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js"
