@@ -13,7 +13,7 @@
 | #7 ClaimIdentity 防碰撞 | PASS | High | 无 / #2 | 确认、转换、贡献者、资源身份 | 已完成 | PASS | Spec/Correctness PASS | ecd9ef6、b5f47f4 |
 | #8 生产者事务边界 | PASS | 正确性基础 | 无 / #2 | 命令、账本、投影、outbox 原子提交 | 已完成 | PASS | PASS | a417699 |
 | #9 TTL 与投影 revision | PASS | 正确性基础 | 无 / #2 | 到期调度、回落、旧投影抑制 | 已完成 | PASS | PASS | 6d166a6、c9786f0 |
-| #10 配置生命周期 | TODO | High | #3 / #2 | 校验、revision、驱动热激活 | 是 | 待运行 | 待审查 | — |
+| #10 配置生命周期 | PASS | High | #3 / #2 | 完整契约校验、影响预览、原子 revision、驱动热激活与安全移除 | 已完成 | pnpm verify PASS | Spec/Correctness/Security/Recovery PASS | df008ce |
 | #11 HTTP 目标授权 | PASS | High | 无 / #2 | 精确 origin 授权、DNS 全答案校验、固定 IP 连接 | 已完成 | pnpm verify PASS | Spec/Correctness/Security PASS | 50767f6 |
 | #12 Delivery 恢复 | PASS | 正确性基础 | 无 / #2 | lease、恢复、fencing、关闭等待在途投递 | 已完成 | pnpm verify PASS | Spec/Correctness/Integration PASS | c9786f0、c3680eb |
 | #13 Append-only 投递 | PASS | Medium | 无 / #2 | 批处理、重试、TTL、死信 | 已完成 | PASS | Spec/Correctness PASS | de8b4e6、cfe4d86、b5f47f4 |
@@ -21,11 +21,11 @@
 | #15 统一历史保留 | PASS | Medium | 无 / #2 | 保留预算、持久防重身份 | 已完成 | PASS | Spec/Correctness PASS | 4d3c178 |
 | #16 Sidecar 与 SSE 恢复 | TODO | High | 无 / #2 | 桌面进程监督、快照后订阅 | 是 | 待运行 | 待审查 | — |
 | #17 来源与 PushPlus 管理 | TODO | High | 无 / #2、#16 | 来源、凭据引用、UI | 是 | 待运行 | 待审查 | — |
-| #18 驱动与配置管理 UI | TODO | High | #10 / #2、#16 | DriverInstance、Binding、revision UI | 否，等待 #10 | 待运行 | 待审查 | — |
+| #18 驱动与配置管理 UI | TODO | High | #10 / #2、#16 | DriverInstance、Binding、revision UI | 是，待 #16 验收 | 待运行 | 待审查 | — |
 | #19 暂停、确认与诊断 UI | TODO | High | #7、#14 / #2、#16 | 运行管理、确认、支持包 | 是 | 待运行 | 待审查 | — |
 | #20 Codex spool 验收 | TODO | High | 无 / #2、#8、#9 | hook、spool、drain 黑盒验收 | 是 | 待运行 | 待审查 | — |
 | #21 VK87 契约验收 | TODO | High | 无 / #2 | fake HID、选择器、65 字节 profile | 是 | 待运行 | 待审查 | — |
-| #22 容量与延迟验收 | TODO | Medium | #2、#8、#9、#10、#12、#13、#15 / 无 | 真实 Core 压测 | 否，等待 #10 | 待运行 | 待审查 | — |
+| #22 容量与延迟验收 | TODO | Medium | #2、#8、#9、#10、#12、#13、#15 / 无 | 真实 Core 压测 | 是 | 待运行 | 待审查 | — |
 | #23 Packaging 与 Updater | TODO | High | 无 / #2、#16、#17、#18、#19、#22 | 三平台安装与升级 smoke | 是，基础设施可先做 | 待运行 | 待审查 | — |
 | #24 Stable 发布门禁 | TODO | High | #23 / #3–#22 | 签名、公证、provenance、stable gate | 否，等待 #23 | 待运行 | 待审查 | — |
 

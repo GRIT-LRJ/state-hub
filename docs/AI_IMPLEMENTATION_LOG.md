@@ -412,3 +412,56 @@ PASS；Spec PASS；Correctness architecture PASS；Security PASS；Crash/Recover
 ### Commit
 
 `f483cb0`。
+
+
+## Issue #10 — 配置校验、原子 Revision 与驱动热激活
+
+### 这张 Issue 要解决什么
+
+让管理员在发布配置前知道它是否合法、会影响哪些当前状态；发布成功后，驱动立即采用新配置，回滚仍保留完整历史。
+
+### 原来有什么问题
+
+草稿只检查重复 ID、目标是否存在及少数资源冲突。错误的驱动参数、未声明的动作或不完整的硬件 profile 可以进入已发布配置。相同 ID 的驱动可能继续使用旧缓存；配置发布与正在执行的投递之间也缺少明确边界。直接删除仍有状态投影的实例，会留下重启后继续重试的无目标 idle 投递。
+
+### 我改了什么
+
+草稿和发布现在共用完整的配置校验：检查结构、内置与已安装插件的 JSON Schema、来源/信号/事件和实例引用、动作名称与类别、映射常量、JSON Pointer、物理资源及安全整数。动态映射出的动作在创建投递前再次按驱动动作 Schema 验证；若不符合，整条生产者写事务回滚。内置 Catalog 的标准 ID 现在能实际运行。HTTP 配置拒绝带凭据的 URL、不匹配的私网授权和自定义明文 header；VK87 的选择器与完整报告在发布前校验。
+
+影响预览增加修改过的绑定和当前受影响 claim 数。回滚只接受曾发布的 revision。配置发布先等当前驱动调用结束，再在一个 SQLite 事务内替换 revision、清理旧 stateful 投递并为配置已改变的实例安排当前投影；驱动缓存按实际配置变化失效。移除或停用仍有活动状态的实例返回 `CONFIG_ACTIVE_OUTPUT`，管理员需先移除绑定并让 idle 投递结清；最终移除会清除其旧投影，不让重启重新生成无目标任务。
+
+### 为什么这样改
+
+校验必须发生在发布前，不能把驱动启动失败当作配置错误提示。动态数据只有运行时才知道具体值，因此在事务内补一道动作校验。旧驱动调用与新配置交错会让同一投影 revision 误以为已经送达；等待在途调用并原子安排新投递，消除了这个窗口。移除活动实例先要求进入 idle，可避免把无法再投递的任务留给恢复循环。
+
+### 哪些文件发生变化
+
+新增 `apps/core/src/config-validation.ts` 及其单元测试；修改 `service.ts`、`server.ts`、`drivers.ts`、`builtins.ts`。真实 Core 的配置生命周期、在途热切换验收新增；原有身份、保留、插件安装和批处理夹具改用 Catalog 声明的合法动作。Core 测试脚本改用单 worker，并让 acceptance 在隔离子进程中运行。
+
+### 数据库是否变化
+
+没有新增表、列或迁移。草稿的 `impact_json` 增加绑定更新和受影响 claim 计数；发布事务会抑制旧 stateful 投递、写入新配置当前投影投递，并在安全移除实例时清理其投影。
+
+### 外部行为是否变化
+
+无效配置返回稳定错误码，不回显用户填写的密钥或标识。配置变更后的下一次驱动调用使用新参数；发布在已有调用执行期间会等待该调用结束。标准内置 Catalog ID 可用于 DriverInstance。直接移除活动实例得到 409，需先让输出进入 idle。未发布草稿不能作为回滚来源。新配置不再接受任意 HTTP header 的明文值；旧的 `allowPrivateNetwork` 字段仍不授予访问权限。
+
+### 风险
+
+移除活动驱动需要两次配置操作，管理 UI 应清楚引导。发布可能等待当前驱动调用的有界超时。旧数据库若曾存入自定义 HTTP header，本次不会擅自删除其原值；运行时继续阻断敏感和传输 header，支持包仍进行防御性脱敏。单 worker acceptance 较慢，但保留了全部真实 Core 用例。
+
+### 测试
+
+单元测试逐类验证非法结构、Schema、动作类别、引用、资源冲突、指针、硬件 profile、URL/header 和溢出数值的拒绝；验证动态映射失败时 event、dedupe 和投递均不落库；验证预览能包含只被新 selector 匹配的 claim、失败发布不改变已发布 revision、回滚不能引用草稿，以及安全移除后恢复不再生成旧投递。真实 Core 验收直接统计两个 HTTP 服务收到的请求：同 ID 目标更新与回滚各走正确目标，历史事件不重发，Core 强杀重启后配置和投影仍正确；另一测试把旧 HTTP 调用停在半途，证明发布等它结束后新目标恰好收到一次当前投影。签名插件的合法动作继续验证批次身份不碰撞。最终 `pnpm verify` 四项门禁通过。
+
+### Reviewer 曾发现的问题
+
+Review 发现只在发布时检查映射会漏掉运行时的动态值，已在投递前按 Schema 复核并通过事务回滚。发现 VK87 profile 与 HTTP 明文 header 可通过旧的弱校验，已提前拒绝。发现旧 stateful lease 会挡住新配置当前投影，已增加发布静默边界和原子重新安排。发现直接移除实例会造成重启后的无目标投递，已加入 idle 前置条件及投影清理。发现回滚可引用草稿、预览漏算新 selector 匹配，均已修复。Vitest 线程 worker 的 Windows access violation 已复现；改用单个隔离 fork 后，完整 acceptance 与四项门禁通过。Critical 0、High 0。
+
+### 最终状态
+
+PASS；Spec PASS；Correctness architecture PASS；Security PASS；Crash/Recovery PASS。
+
+### Commit
+
+`df008ce`。
