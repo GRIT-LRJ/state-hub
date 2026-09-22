@@ -25,6 +25,7 @@ interface DeliveryRow {
   projection_revision: number | null;
   batch_key: string | null;
   batch_id: string | null;
+  status: string;
   attempt_count: number;
   deadline_at: string | null;
   lease_until: string | null;
@@ -181,7 +182,8 @@ export class DeliveryDispatcher {
     const now = this.#now();
     const nowIso = now.toISOString();
     const leaseUntil = new Date(now.getTime() + this.#leaseDurationMs).toISOString();
-    return this.db.transaction(() => {
+    const exhausted: Array<{ deliveryId: string; detail: string }> = [];
+    const claimed = this.db.transaction(() => {
       const anchor = this.db.raw
         .prepare(
           `SELECT * FROM deliveries
@@ -202,16 +204,38 @@ export class DeliveryDispatcher {
             )
             .all(anchor.batch_id, nowIso, nowIso) as DeliveryRow[]
         : [anchor];
+      const eligible: DeliveryRow[] = [];
+      for (const row of rows) {
+        const limit = row.action_kind === "append-only" ? this.#appendOnlyMaxAttempts
+          : row.action_kind === "stateful" ? 10 : undefined;
+        if (limit === undefined || row.attempt_count < limit) {
+          eligible.push(row);
+          continue;
+        }
+        const detail = `Retry budget exhausted after ${limit} attempts during lease recovery`;
+        const update = this.db.raw.prepare(
+          `UPDATE deliveries
+           SET status = 'dead-letter', completed_at = ?, lease_until = NULL, last_error = ?
+           WHERE id = ? AND status = ? AND lease_until IS ?`,
+        ).run(nowIso, detail, row.id, row.status, row.lease_until);
+        if (update.changes === 0) continue;
+        this.recordAttempt(row, nowIso, nowIso, "dead-letter", detail);
+        exhausted.push({ deliveryId: row.id, detail });
+      }
       const claim = this.db.raw.prepare(
         "UPDATE deliveries SET status = 'leased', lease_until = ?, attempt_count = attempt_count + 1 WHERE id = ?",
       );
-      for (const row of rows) claim.run(leaseUntil, row.id);
-      return rows.map((row) => ({
+      for (const row of eligible) claim.run(leaseUntil, row.id);
+      return eligible.map((row) => ({
         ...row,
         attempt_count: row.attempt_count + 1,
         lease_until: leaseUntil,
       }));
     });
+    for (const { deliveryId, detail } of exhausted) {
+      this.events.publish("delivery.dead-letter", { deliveryId, detail });
+    }
+    return claimed;
   }
 
   private async execute(deliveries: DeliveryRow[]): Promise<void> {

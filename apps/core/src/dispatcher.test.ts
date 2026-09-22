@@ -122,6 +122,119 @@ describe("append-only dispatcher", () => {
     ]);
   });
 
+  it("allows exactly the final attempt, then delivers or dead-letters without an extra call", async () => {
+    const now = new Date("2026-01-01T00:00:00.000Z");
+    const driver = new ProgrammableDriver((attempt) => attempt === 1
+      ? { status: "delivered" }
+      : { status: "retry", detail: "unavailable" });
+    const dispatcher = new DeliveryDispatcher(db, { get: () => driver }, events, {
+      now: () => now,
+      appendOnlyMaxAttempts: 2,
+    });
+    for (const id of ["first", "second"]) {
+      insertAppendDelivery(db, {
+        id,
+        availableAt: now.toISOString(),
+        deadlineAt: new Date(now.getTime() + 60_000).toISOString(),
+      });
+      db.raw.prepare("UPDATE deliveries SET attempt_count = 1 WHERE id = ?").run(id);
+    }
+
+    await dispatcher.drain();
+
+    expect(driver.requests.map((request) => request.deliveryId)).toEqual(["first", "second"]);
+    expect(db.raw.prepare("SELECT id, status, attempt_count FROM deliveries ORDER BY id").all()).toEqual([
+      { id: "first", status: "delivered", attempt_count: 2 },
+      { id: "second", status: "dead-letter", attempt_count: 2 },
+    ]);
+  });
+
+  it("does not invoke the driver after reclaiming an exhausted lease", async () => {
+    const now = new Date("2026-01-01T00:00:01.000Z");
+    const driver = new ProgrammableDriver(() => ({ status: "delivered" }));
+    const dispatcher = new DeliveryDispatcher(db, { get: () => driver }, events, {
+      now: () => now,
+      appendOnlyMaxAttempts: 2,
+    });
+    insertAppendDelivery(db, {
+      availableAt: new Date(now.getTime() - 2_000).toISOString(),
+      deadlineAt: new Date(now.getTime() + 60_000).toISOString(),
+    });
+    db.raw.prepare("UPDATE deliveries SET status = 'leased', attempt_count = 2, lease_until = ? WHERE id = 'delivery'")
+      .run(new Date(now.getTime() - 1_000).toISOString());
+
+    await dispatcher.drain();
+
+    expect(driver.requests).toHaveLength(0);
+    expect(db.raw.prepare("SELECT status, attempt_count FROM deliveries WHERE id = 'delivery'").get()).toEqual({
+      status: "dead-letter",
+      attempt_count: 2,
+    });
+  });
+
+  it("excludes exhausted members from a recovered batch before the external call", async () => {
+    const now = new Date("2026-01-01T00:00:01.000Z");
+    const driver = new ProgrammableDriver(() => ({ status: "delivered" }));
+    const dispatcher = new DeliveryDispatcher(db, { get: () => driver }, events, {
+      now: () => now,
+      appendOnlyMaxAttempts: 2,
+    });
+    for (const id of ["exhausted", "eligible"]) {
+      insertAppendDelivery(db, {
+        id,
+        availableAt: new Date(now.getTime() - 2_000).toISOString(),
+        deadlineAt: new Date(now.getTime() + 60_000).toISOString(),
+      });
+      db.raw.prepare("UPDATE deliveries SET batch_id = 'batch' WHERE id = ?").run(id);
+    }
+    db.raw.prepare("UPDATE deliveries SET status = 'leased', attempt_count = 2, lease_until = ? WHERE id = 'exhausted'")
+      .run(new Date(now.getTime() - 1_000).toISOString());
+
+    await dispatcher.drain();
+
+    expect(driver.requests).toHaveLength(1);
+    expect(driver.requests[0]?.batch?.map((item) => item.deliveryId)).toEqual(["eligible"]);
+    expect(db.raw.prepare("SELECT id, status, attempt_count FROM deliveries ORDER BY id").all()).toEqual([
+      { id: "eligible", status: "delivered", attempt_count: 1 },
+      { id: "exhausted", status: "dead-letter", attempt_count: 2 },
+    ]);
+  });
+
+  it("fences a late result from the old lease owner after a new owner completes", async () => {
+    let nowMs = Date.parse("2026-01-01T00:00:00.000Z");
+    let releaseFirst: (result: DriverActionResult) => void = () => { throw new Error("First call was not claimed"); };
+    const firstResult = new Promise<DriverActionResult>((resolve) => { releaseFirst = resolve; });
+    const driver: Driver & { requests: DriverActionRequest[] } = {
+      requests: [],
+      async execute(request) {
+        this.requests.push(request);
+        return this.requests.length === 1 ? await firstResult : { status: "delivered" };
+      },
+    };
+    const options = { now: () => new Date(nowMs), leaseDurationMs: 100, appendOnlyMaxAttempts: 2 };
+    const oldOwner = new DeliveryDispatcher(db, { get: () => driver }, events, options);
+    const newOwner = new DeliveryDispatcher(db, { get: () => driver }, events, options);
+    insertAppendDelivery(db, {
+      availableAt: new Date(nowMs).toISOString(),
+      deadlineAt: new Date(nowMs + 60_000).toISOString(),
+    });
+
+    const oldDrain = oldOwner.drain();
+    expect(driver.requests).toHaveLength(1);
+    nowMs += 101;
+    await newOwner.drain();
+    releaseFirst({ status: "retry", detail: "stale result" });
+    await oldDrain;
+
+    expect(driver.requests).toHaveLength(2);
+    expect(db.raw.prepare("SELECT status, attempt_count FROM deliveries WHERE id = 'delivery'").get()).toEqual({
+      status: "delivered",
+      attempt_count: 2,
+    });
+    expect(db.raw.prepare("SELECT attempt, status FROM delivery_attempts WHERE delivery_id = 'delivery'").all())
+      .toEqual([{ attempt: 2, status: "delivered" }]);
+  });
+
   it("dead-letters an expired delivery without calling the driver", async () => {
     const now = new Date("2026-01-01T00:00:00.000Z");
     const driver = new ProgrammableDriver(() => ({ status: "delivered" }));

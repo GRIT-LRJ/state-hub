@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import Database from "better-sqlite3";
 import type { Binding } from "@state-hub/protocol";
 import { describe, expect, it } from "vitest";
 import { dedupeIdentityHash } from "../dedupe-identity.js";
@@ -30,7 +31,8 @@ interface ProbeRequest {
 class BatchProbe {
   readonly requests: ProbeRequest[] = [];
   readonly #server: Server;
-  readonly #statuses: number[] = [];
+  readonly #responses: Array<{ status: number; body?: string }> = [];
+  #holdNext = false;
   #url = "";
 
   private constructor() {
@@ -39,8 +41,12 @@ class BatchProbe {
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Omit<ProbeRequest, "receivedAt">;
       this.requests.push({ ...payload, receivedAt: Date.now() });
-      const status = this.#statuses.shift() ?? 204;
-      response.writeHead(status).end(status >= 400 ? "programmed failure" : undefined);
+      if (this.#holdNext) {
+        this.#holdNext = false;
+        return;
+      }
+      const { status, body } = this.#responses.shift() ?? { status: 204 };
+      response.writeHead(status).end(body ?? (status >= 400 ? "programmed failure" : undefined));
     });
   }
 
@@ -63,7 +69,15 @@ class BatchProbe {
   }
 
   respondWith(...statuses: number[]): void {
-    this.#statuses.push(...statuses);
+    this.#responses.push(...statuses.map((status) => ({ status })));
+  }
+
+  respondWithBody(status: number, body: string): void {
+    this.#responses.push({ status, body });
+  }
+
+  holdNext(): void {
+    this.#holdNext = true;
   }
 
   async close(): Promise<void> {
@@ -93,6 +107,127 @@ function appendBinding(): Binding {
 }
 
 describe("append-only reliable batching", () => {
+  it("does not invoke an exhausted delivery after Core crashes before final-attempt completion", async () => {
+    const probe = await BatchProbe.start();
+    const harness = await CoreAcceptanceHarness.start({ deliveryLeaseMs: 300 });
+    try {
+      const producer = await harness.admin.createProducer("append-acceptance");
+      await harness.admin.publishConfig({
+        bindings: [{ ...appendBinding(), batchWindowMs: 120_000 }],
+        driverInstances: [{
+          id: "append-http",
+          driverType: "http",
+          enabled: true,
+          config: { baseUrl: probe.url, allowPrivateNetwork: true, timeoutMs: 5_000 },
+        }],
+      });
+      const command = await producer.emitEvent({
+        eventId: "final-attempt-crash",
+        type: "audit.recorded",
+        value: { sequence: 1 },
+      });
+      expect(command.response.status).toBe(202);
+      await harness.crash();
+      const database = new Database(harness.paths.database);
+      try {
+        const updated = database.prepare(
+          "UPDATE deliveries SET attempt_count = 7, available_at = ? WHERE event_id = 'final-attempt-crash' AND status = 'pending'",
+        ).run(new Date().toISOString());
+        expect(updated.changes).toBe(1);
+      } finally {
+        database.close();
+      }
+
+      probe.holdNext();
+      await harness.restart();
+      await harness.waitFor(() => probe.requests.length === 1, {
+        description: "eighth and final HTTP driver invocation",
+      });
+      const leased = new Database(harness.paths.database, { readonly: true, fileMustExist: true });
+      let leaseUntil: string;
+      try {
+        const row = leased.prepare(
+          "SELECT status, attempt_count, lease_until FROM deliveries WHERE event_id = 'final-attempt-crash'",
+        ).get() as { status: string; attempt_count: number; lease_until: string };
+        expect(row.status).toBe("leased");
+        expect(row.attempt_count).toBe(8);
+        leaseUntil = row.lease_until;
+      } finally {
+        leased.close();
+      }
+      await harness.crash();
+      await harness.waitFor(() => Date.now() >= Date.parse(leaseUntil), {
+        description: "final attempt lease expiry after Core crash",
+      });
+      await harness.restart();
+      await harness.waitFor(() => {
+        const recovered = new Database(harness.paths.database, { readonly: true, fileMustExist: true });
+        try {
+          const row = recovered.prepare(
+            "SELECT status, attempt_count FROM deliveries WHERE event_id = 'final-attempt-crash'",
+          ).get() as { status: string; attempt_count: number };
+          return row.status === "dead-letter" && row.attempt_count === 8;
+        } finally {
+          recovered.close();
+        }
+      }, { description: "dead-letter without a ninth invocation" });
+      expect(probe.requests).toHaveLength(1);
+    } finally {
+      await harness.dispose();
+      await probe.close();
+    }
+  }, 30_000);
+
+  it("keeps untrusted HTTP response contents out of support diagnostics", async () => {
+    const probe = await BatchProbe.start();
+    const harness = await CoreAcceptanceHarness.start();
+    const sensitive = [
+      "token=token-value-123",
+      "Authorization: Bearer auth-value-456",
+      "Cookie: sid=cookie-value-789",
+      "credential=credential-value-234",
+      "password=password-value-567",
+      "secret=secret-value-890",
+      "email=person@example.test",
+      "phone=+15551234567",
+    ];
+    try {
+      const producer = await harness.admin.createProducer("append-acceptance");
+      await harness.admin.publishConfig({
+        bindings: [{ ...appendBinding(), batchWindowMs: 0 }],
+        driverInstances: [{
+          id: "append-http",
+          driverType: "http",
+          enabled: true,
+          config: { baseUrl: probe.url, allowPrivateNetwork: true },
+        }],
+      });
+      for (const [index, value] of sensitive.entries()) {
+        probe.respondWithBody(400, value);
+        await producer.emitEvent({
+          eventId: `sensitive-error-${index}`,
+          type: "audit.recorded",
+          value: { sequence: index },
+        });
+        await harness.waitFor(async () => (await harness.admin.snapshot()).deadLetters === index + 1 || false);
+      }
+
+      const bundle = await harness.admin.diagnostics();
+      const serialized = JSON.stringify(bundle);
+      for (const value of sensitive) expect(serialized).not.toContain(value);
+      expect(bundle.deliveries).toContainEqual(expect.objectContaining({
+        eventId: expect.stringMatching(/^sha256:/u),
+        status: "dead-letter",
+        attemptCount: 1,
+        lastError: "HTTP 400",
+      }));
+      expect(probe.requests).toHaveLength(sensitive.length);
+    } finally {
+      await harness.dispose();
+      await probe.close();
+    }
+  }, 30_000);
+
   it("recovers a persisted window after crash and sends one traceable HTTP batch", async () => {
     const probe = await BatchProbe.start();
     const harness = await CoreAcceptanceHarness.start({ deliveryLeaseMs: 300 });
