@@ -14,7 +14,7 @@
 | #8 生产者事务边界 | PASS | 正确性基础 | 无 / #2 | 命令、账本、投影、outbox 原子提交 | 已完成 | PASS | PASS | a417699 |
 | #9 TTL 与投影 revision | PASS | 正确性基础 | 无 / #2 | 到期调度、回落、旧投影抑制 | 已完成 | PASS | PASS | 6d166a6、c9786f0 |
 | #10 配置生命周期 | TODO | High | #3 / #2 | 校验、revision、驱动热激活 | 否，等待 #3 | 待运行 | 待审查 | — |
-| #11 HTTP 目标授权 | TODO | High | 无 / #2 | SSRF 防护与具体目标授权 | 是 | 待运行 | 待审查 | — |
+| #11 HTTP 目标授权 | PASS | High | 无 / #2 | 精确 origin 授权、DNS 全答案校验、固定 IP 连接 | 已完成 | pnpm verify PASS | Spec/Correctness/Security PASS | 50767f6 |
 | #12 Delivery 恢复 | PASS | 正确性基础 | 无 / #2 | lease、恢复、fencing | 已完成 | PASS | PASS | c9786f0 |
 | #13 Append-only 投递 | PASS | Medium | 无 / #2 | 批处理、重试、TTL、死信 | 已完成 | PASS | Spec/Correctness PASS | de8b4e6、cfe4d86、b5f47f4 |
 | #14 支持包脱敏 | PASS | High | 无 / #2 | 来源分类、预览与导出 | 已完成 | PASS | Spec/Correctness/Security PASS | 5c9992d |

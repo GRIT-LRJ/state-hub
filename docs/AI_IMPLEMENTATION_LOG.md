@@ -206,3 +206,53 @@ PASS；Spec PASS；Correctness architecture PASS；Critical 0；High 0。`pnpm v
 ### Commit
 
 `ecd9ef6`、`b5f47f4`（跨 Issue 集成修复）。
+
+## Issue #11 — Generic HTTP 精确目标授权
+
+### 这张 Issue 要解决什么
+
+只让 HTTP 驱动访问明确批准的目标，避免一个宽泛开关意外开放本机、内网或云服务元数据地址。
+
+### 原来有什么问题
+
+旧的 `allowPrivateNetwork` 一旦开启，会同时放行所有私网、loopback、link-local 和其他特殊地址；配置者无法只批准一个具体目标。DNS 有多个答案时，旧逻辑在这个开关下也不会阻止危险答案。
+
+### 我改了什么
+
+改用 `privateTargetOrigin`，其规范化后的协议、主机和端口必须与 `baseUrl` 一致。默认拒绝本机、私网和特殊用途地址；具体授权只开放常规私网与 loopback，link-local、metadata 等始终拒绝。每次请求检查全部 DNS 答案，拒绝公网和私网混合解析，只连接本次检查过的 IP。禁止配置覆盖 HTTP Host 头。旧开关即使留在已有配置里也不再产生授权效果。
+
+### 为什么这样改
+
+授权边界应与配置中的唯一目标一致；DNS 和 HTTP 连接必须使用同一次解析结果，才不会在检查后换地址。Host 头也必须与批准目标一致。
+
+### 哪些文件发生变化
+
+`apps/core/src/http-target-policy.ts`、`drivers.ts`、`builtins.ts`、HTTP 策略单元测试、真实 Core 验收测试、原有 HTTP 投递验收配置及 `docs/ARCHITECTURE.md`。
+
+### 数据库是否变化
+
+没有 schema 或迁移。已有 driver 配置若只含旧开关，仍可读取，但对私网目标会安全拒绝投递；管理员需为所需目标配置精确授权。
+
+### 外部行为是否变化
+
+HTTP 驱动的私网授权配置字段变更。未授权投递在发起 HTTP 请求前失败并按现有重试机制处理；准确授权的目标可正常收取投递。管理配置 schema 显示新的字段。
+
+### 风险
+
+依赖旧开关的现有内网投递会暂停成功交付，直到补上精确目标授权。保守的特殊用途地址分类可能拒绝部分有意使用的非公网地址。
+
+### 测试
+
+21 条新增策略/传输测试覆盖 IPv4、IPv6、映射地址、本机、内网、link-local、metadata、特殊用途地址、目标规范化匹配、混合 DNS、DNS 答案变化、固定地址连接与 Host 头。真实 Core 验收先用旧开关投递并断言 HTTP 服务端收到零次请求，再发布精确授权并断言恰好收到一次。原有 append-only、恢复和 retention 的真实 HTTP 测试均已迁移并通过。`pnpm verify` 的四项门禁通过。
+
+### Reviewer 曾发现的问题
+
+复核发现配置可自定义 Host 头，让实际服务按另一个虚拟主机处理；已在请求前拒绝覆盖并加入零请求测试。还补拒绝 IPv6 文档地址和映射形式的 metadata 地址。最终 Critical 0、High 0。
+
+### 最终状态
+
+PASS；Spec PASS；Correctness architecture PASS；Security PASS；Crash/Recovery PASS。
+
+### Commit
+
+`50767f6`。
