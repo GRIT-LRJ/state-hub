@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import type { StateHubDatabase } from "./database.js";
 import type { Driver } from "./drivers.js";
 import type { HubEventBus } from "./events.js";
+import { safeDeliveryErrorSummary } from "./delivery-diagnostics.js";
 
 interface DeliveryRow {
   id: string;
@@ -258,11 +259,12 @@ export class DeliveryDispatcher {
     let result: DriverActionResult;
     try {
       result = await driver.execute(request);
-    } catch (error) {
-      result = { status: "retry", detail: error instanceof Error ? error.message : String(error) };
+    } catch {
+      result = { status: "retry", detail: "Driver error details withheld" };
     }
+    const safeDetail = safeDeliveryErrorSummary(result.detail);
     if (result.status !== "retry") {
-      this.finish(active, startedAt, result.status, result.detail);
+      this.finish(active, startedAt, result.status, safeDetail);
       return;
     }
 
@@ -275,7 +277,7 @@ export class DeliveryDispatcher {
       const retryBudget = first.action_kind === "append-only" ? this.#appendOnlyMaxAttempts : 10;
       const detail = deliveryFailureDetail(
         `Retry budget exhausted after ${retryBudget} attempts`,
-        result.detail,
+        safeDetail,
       );
       this.finish(exhausted, startedAt, "dead-letter", detail);
     }
@@ -290,7 +292,7 @@ export class DeliveryDispatcher {
         ? result.retryAfterMs
         : exponentialDelay;
     const delay = Math.min(this.#retryMaxMs, Math.max(0, requestedDelay));
-    this.reschedule(retryable, startedAt, delay, result.detail);
+    this.reschedule(retryable, startedAt, delay, safeDetail);
   }
 
   private buildRequest(deliveries: DeliveryRow[]): DriverActionRequest {

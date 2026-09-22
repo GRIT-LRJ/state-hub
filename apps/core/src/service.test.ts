@@ -253,9 +253,58 @@ describe("StateHub vertical slice", () => {
     service.upsertClaim("codex", producerToken, "session-secret", "status", {
       value: { phase: "working", prompt: "private prompt" },
     });
-    const serialized = JSON.stringify(service.diagnosticBundle());
+    db.raw.prepare("UPDATE deliveries SET last_error = ? WHERE action_kind = 'append-only'")
+      .run("HTTP 400: Authorization Bearer private-credential-value");
+    const bundle = service.diagnosticBundle();
+    const serialized = JSON.stringify(bundle);
     expect(serialized).not.toContain("private prompt");
     expect(serialized).not.toContain(producerToken);
+    expect(serialized).not.toContain("private-credential-value");
+    expect(bundle.deliveries).toContainEqual(expect.objectContaining({ lastError: "HTTP 400" }));
+    db.raw.prepare("UPDATE deliveries SET last_error = ? WHERE action_kind = 'append-only'")
+      .run("unexpected driver failure: Authorization Bearer private-credential-value");
+    expect(JSON.stringify(service.diagnosticBundle())).not.toContain("private-credential-value");
+    const unknownErrorBundle = JSON.stringify(service.diagnosticBundle());
+    expect(unknownErrorBundle).toContain("Driver error details withheld");
     expect(serialized).toContain("[REDACTED]");
+  });
+
+  it("classifies producer-controlled identifiers and mapped values in support diagnostics", () => {
+    const sensitive = "Authorization: Bearer support-bundle-private-token";
+    const draft = service.createConfigDraft({
+      bindings: [{
+        id: sensitive,
+        name: sensitive,
+        enabled: sensitive as unknown as boolean,
+        selector: { producerId: "codex", eventType: sensitive, scopePattern: "*" },
+        conditions: [],
+        mapping: { content: { kind: "constant", value: sensitive } },
+        target: {
+          driverInstanceId: "virtual-main",
+          resourceChannel: sensitive,
+          actionKind: sensitive as Binding["target"]["actionKind"],
+          actionName: "notify",
+        },
+      }, statefulBinding],
+      driverInstances: [{
+        id: "virtual-main",
+        driverType: "virtual",
+        enabled: sensitive as unknown as boolean,
+        config: {},
+      }],
+    });
+    service.publishConfig(draft.revision);
+    service.upsertClaim("codex", producerToken, sensitive, "status", {
+      value: { color: sensitive, phase: sensitive },
+    });
+    service.emitEvent("codex", producerToken, { eventId: sensitive, type: sensitive });
+
+    const bundle = service.diagnosticBundle();
+    expect(JSON.stringify(bundle)).not.toContain(sensitive);
+    expect(bundle.runtime).toMatchObject({ pendingDeliveries: expect.any(Number) });
+    expect(bundle.deliveries).toContainEqual(expect.objectContaining({
+      actionKind: "other",
+      eventId: expect.stringMatching(/^sha256:/u),
+    }));
   });
 });

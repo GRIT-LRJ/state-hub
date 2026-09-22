@@ -27,6 +27,8 @@ import type { StateHubDatabase } from "./database.js";
 import type { HubEventBus } from "./events.js";
 import { authenticateProducer } from "./auth.js";
 import { validateClaimValue, validateEventValue } from "./schema-validation.js";
+import { safeDeliveryErrorSummary } from "./delivery-diagnostics.js";
+import { dedupeIdentityHash } from "./dedupe-identity.js";
 
 interface ClaimRow {
   producer_id: string;
@@ -113,18 +115,42 @@ export class HubError extends Error {
   }
 }
 
-function redactDiagnostic(value: unknown, key = ""): unknown {
-  if (/token|secret|password|authorization|cookie|credential/iu.test(key)) return "[REDACTED]";
-  if (Array.isArray(value)) return value.map((item) => redactDiagnostic(item));
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([entryKey, entry]) => [
-        entryKey,
-        redactDiagnostic(entry, entryKey),
-      ]),
-    );
+function diagnosticIdentity(value: string | null | undefined): string | null {
+  return value == null ? null : `sha256:${dedupeIdentityHash(value)}`;
+}
+
+function diagnosticEnum(value: unknown, allowed: readonly string[]): string {
+  return typeof value === "string" && allowed.includes(value) ? value : "other";
+}
+
+function diagnosticTimestamp(value: unknown): string | null {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)) {
+    return null;
   }
-  return value;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value ? value : null;
+}
+
+function diagnosticNonNegativeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+const diagnosticHistoryKinds = [
+  "claim.upsert", "claim.clear", "event.emit", "snapshot.replace", "outputs.paused",
+  "outputs.resumed", "config.published", "delivery.suppressed",
+] as const;
+
+function safeHistoryPayload(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const payload = value as Record<string, unknown>;
+  const safe: Record<string, number> = {};
+  for (const key of ["revision", "claimCount", "suppressedDeliveries"]) {
+    if (typeof payload[key] === "number" && Number.isSafeInteger(payload[key])) {
+      safe[key] = payload[key];
+    }
+  }
+  if (Array.isArray(payload.claims)) safe.claimCount = payload.claims.length;
+  return safe;
 }
 
 function decodeClaim(row: ClaimRow): StateClaim {
@@ -648,18 +674,14 @@ export class StateHubService {
 
   diagnosticPreview(): { files: Array<{ name: string; containsSecrets: false }>; redaction: string[] } {
     return {
-      files: [
-        { name: "runtime-summary.json", containsSecrets: false },
-        { name: "config-redacted.json", containsSecrets: false },
-        { name: "recent-history.json", containsSecrets: false },
-        { name: "delivery-diagnostics.json", containsSecrets: false },
-      ],
-      redaction: ["claim values", "token/secret/password/authorization/cookie/credential fields", "producer token hashes"],
+      files: [{ name: "state-hub-support-bundle.json", containsSecrets: false }],
+      redaction: ["claim and action values", "producer-controlled identifiers and config values", "driver error details", "producer token hashes"],
     };
   }
 
   diagnosticBundle(): Record<string, unknown> {
     const snapshot = this.snapshot();
+    const config = this.exportConfig();
     const recentHistory = this.db.raw
       .prepare("SELECT kind, subject_id, payload_json, created_at FROM history ORDER BY id DESC LIMIT 500")
       .all() as Array<{ kind: string; subject_id: string | null; payload_json: string; created_at: string }>;
@@ -677,40 +699,67 @@ export class StateHubService {
         revision: snapshot.revision,
         outputsPaused: snapshot.outputsPaused,
         claimCount: snapshot.claims.length,
-        projections: snapshot.projections.map((projection) => redactDiagnostic(projection)),
+        projections: snapshot.projections.map((projection) => ({
+          resourceKey: diagnosticIdentity(projection.resourceKey),
+          driverInstanceId: diagnosticIdentity(projection.driverInstanceId),
+          resourceChannel: diagnosticIdentity(projection.resourceChannel),
+          revision: projection.revision,
+          urgency: projection.urgency === null ? null : diagnosticEnum(
+            projection.urgency, ["critical", "action-required", "informational", "ambient"],
+          ),
+          hasAction: projection.action !== null,
+          contributorBindingCount: projection.contributorBindingIds.length,
+          contributorClaimCount: projection.contributorClaimKeys.length,
+        })),
         pendingDeliveries: snapshot.pendingDeliveries,
         deadLetters: snapshot.deadLetters,
       },
-      config: redactDiagnostic(this.exportConfig()),
+      config: {
+        bindings: config.bindings.map((binding) => ({
+          id: diagnosticIdentity(binding.id),
+          enabled: binding.enabled === true,
+          driverInstanceId: diagnosticIdentity(binding.target.driverInstanceId),
+          resourceChannel: diagnosticIdentity(binding.target.resourceChannel),
+          actionKind: diagnosticEnum(binding.target.actionKind, ["stateful", "queued-effect", "append-only"]),
+          conditionCount: binding.conditions.length,
+          mappingFieldCount: Object.keys(binding.mapping).length,
+          batchWindowMs: diagnosticNonNegativeInteger(binding.batchWindowMs),
+        })),
+        driverInstances: config.driverInstances.map((instance) => ({
+          id: diagnosticIdentity(instance.id),
+          driverType: diagnosticEnum(instance.driverType, ["virtual", "http", "pushplus", "vk87"]),
+          enabled: instance.enabled === true,
+        })),
+      },
       history: recentHistory.map((row) => ({
-        kind: row.kind,
-        subjectId: row.subject_id,
-        payload: redactDiagnostic(JSON.parse(row.payload_json) as unknown),
-        createdAt: row.created_at,
+        kind: diagnosticEnum(row.kind, diagnosticHistoryKinds),
+        subjectId: diagnosticIdentity(row.subject_id),
+        payload: safeHistoryPayload(JSON.parse(row.payload_json) as unknown),
+        createdAt: diagnosticTimestamp(row.created_at),
       })),
       deliveries: deliveries.map((delivery) => ({
-        deliveryId: delivery.id,
-        commandId: delivery.command_id,
-        producerId: delivery.producer_id,
-        eventId: delivery.event_id,
+        deliveryId: diagnosticIdentity(delivery.id as string),
+        commandId: diagnosticIdentity(delivery.command_id as string | null),
+        producerId: diagnosticIdentity(delivery.producer_id as string | null),
+        eventId: diagnosticIdentity(delivery.event_id as string | null),
         eventRevision: delivery.event_revision,
-        batchId: delivery.batch_id,
-        driverInstanceId: delivery.driver_instance_id,
-        resourceChannel: delivery.resource_channel,
-        actionKind: delivery.action_kind,
-        status: delivery.status,
-        attemptCount: delivery.attempt_count,
-        deadlineAt: delivery.deadline_at,
-        lastError: delivery.last_error,
-        createdAt: delivery.created_at,
-        completedAt: delivery.completed_at,
+        batchId: diagnosticIdentity(delivery.batch_id as string | null),
+        driverInstanceId: diagnosticIdentity(delivery.driver_instance_id as string),
+        resourceChannel: diagnosticIdentity(delivery.resource_channel as string),
+        actionKind: diagnosticEnum(delivery.action_kind, ["stateful", "queued-effect", "append-only"]),
+        status: diagnosticEnum(delivery.status, ["pending", "leased", "delivered", "dead-letter", "suppressed"]),
+        attemptCount: diagnosticNonNegativeInteger(delivery.attempt_count),
+        deadlineAt: diagnosticTimestamp(delivery.deadline_at),
+        lastError: safeDeliveryErrorSummary(delivery.last_error) ?? null,
+        createdAt: diagnosticTimestamp(delivery.created_at),
+        completedAt: diagnosticTimestamp(delivery.completed_at),
       })),
       claims: snapshot.claims.map((claim) => ({
-        producerId: claim.producerId,
-        scopeId: claim.scopeId,
-        signalId: claim.signalId,
+        producerId: diagnosticIdentity(claim.producerId),
+        scopeId: diagnosticIdentity(claim.scopeId),
+        signalId: diagnosticIdentity(claim.signalId),
         revision: claim.revision,
-        urgency: claim.urgency,
+        urgency: diagnosticEnum(claim.urgency, ["critical", "action-required", "informational", "ambient"]),
         value: "[REDACTED]",
       })),
     };

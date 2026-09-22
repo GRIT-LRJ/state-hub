@@ -164,15 +164,52 @@ describe("append-only dispatcher", () => {
     ).get()).toEqual({
       status: "dead-letter",
       attempt_count: 1,
-      last_error: "HTTP 400: invalid append payload",
+      last_error: "HTTP 400",
     });
     expect(db.raw.prepare(
       "SELECT attempt, status, detail FROM delivery_attempts WHERE delivery_id = 'delivery'",
     ).get()).toEqual({
       attempt: 1,
       status: "dead-letter",
-      detail: "HTTP 400: invalid append payload",
+      detail: "HTTP 400",
     });
+  });
+
+  it("classifies untrusted driver diagnostics before persistence and publication", async () => {
+    let nowMs = Date.parse("2026-01-01T00:00:00.000Z");
+    const sensitive = "Authorization: Bearer private-driver-token";
+    const published: unknown[] = [];
+    const unsubscribe = events.subscribe((event) => published.push(event));
+    const driver = new ProgrammableDriver((attempt) => {
+      if (attempt === 1) throw new Error(sensitive);
+      return { status: "dead-letter", detail: `HTTP 400: ${sensitive}` };
+    });
+    const dispatcher = new DeliveryDispatcher(db, { get: () => driver }, events, {
+      now: () => new Date(nowMs),
+    });
+    insertAppendDelivery(db, {
+      availableAt: new Date(nowMs).toISOString(),
+      deadlineAt: new Date(nowMs + 60_000).toISOString(),
+    });
+    try {
+      await dispatcher.drain();
+      const retry = db.raw.prepare("SELECT available_at FROM deliveries WHERE id = 'delivery'")
+        .get() as { available_at: string };
+      nowMs = Date.parse(retry.available_at);
+      await dispatcher.drain();
+      const delivery = db.raw.prepare("SELECT status, last_error FROM deliveries WHERE id = 'delivery'").get();
+      const attempts = db.raw.prepare(
+        "SELECT status, detail FROM delivery_attempts WHERE delivery_id = 'delivery' ORDER BY attempt",
+      ).all();
+      expect(JSON.stringify({ delivery, attempts, published })).not.toContain(sensitive);
+      expect(delivery).toEqual({ status: "dead-letter", last_error: "HTTP 400" });
+      expect(attempts).toEqual([
+        { status: "retry", detail: "Driver error details withheld" },
+        { status: "dead-letter", detail: "HTTP 400" },
+      ]);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("forms fixed-window batches and keeps boundary and incompatible events separate", async () => {

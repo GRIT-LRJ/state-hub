@@ -240,10 +240,16 @@ export class AdminClient {
     }));
   }
 
+  async diagnosticsPreview(): Promise<{ files: Array<{ name: string; containsSecrets: false }>; redaction: string[] }> {
+    return await responseJson(await this.request("/api/v1/admin/diagnostics/preview"));
+  }
+
+  async diagnosticsExportResponse(): Promise<Response> {
+    return await this.request("/api/v1/admin/diagnostics/export");
+  }
+
   async diagnostics(): Promise<Record<string, unknown>> {
-    return await responseJson<Record<string, unknown>>(
-      await this.request("/api/v1/admin/diagnostics/export"),
-    );
+    return await responseJson<Record<string, unknown>>(await this.diagnosticsExportResponse());
   }
 
   private async request(path: string, init: RequestInit = {}): Promise<Response> {

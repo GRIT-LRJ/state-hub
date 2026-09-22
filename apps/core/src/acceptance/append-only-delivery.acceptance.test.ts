@@ -2,7 +2,10 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Binding } from "@state-hub/protocol";
 import { describe, expect, it } from "vitest";
+import { dedupeIdentityHash } from "../dedupe-identity.js";
 import { CoreAcceptanceHarness } from "./harness.js";
+
+const diagnosticId = (value: string): string => `sha256:${dedupeIdentityHash(value)}`;
 
 interface BatchItem {
   deliveryId: string;
@@ -156,10 +159,11 @@ describe("append-only reliable batching", () => {
         status: string;
         attemptCount: number;
       }>;
-      const audited = deliveries.filter((delivery) => delivery.eventId?.startsWith("audit-"));
+      const audited = deliveries.filter((delivery) =>
+        [diagnosticId("audit-1"), diagnosticId("audit-2")].includes(delivery.eventId));
       expect(audited).toHaveLength(2);
       expect(audited.map((delivery) => delivery.producerId))
-        .toEqual(["append-acceptance", "append-acceptance"]);
+        .toEqual([diagnosticId("append-acceptance"), diagnosticId("append-acceptance")]);
       expect(audited.map((delivery) => delivery.status)).toEqual(["delivered", "delivered"]);
       expect(new Set(audited.map((delivery) => delivery.batchId)).size).toBe(1);
       expect(audited.map((delivery) => delivery.attemptCount)).toEqual([1, 1]);
@@ -183,7 +187,7 @@ describe("append-only reliable batching", () => {
       }, { description: "retried append-only delivery to settle" });
       const retryDiagnostics = await harness.admin.diagnostics();
       expect((retryDiagnostics.deliveries as Array<Record<string, unknown>>).find(
-        (delivery) => delivery.eventId === "audit-retry",
+        (delivery) => delivery.eventId === diagnosticId("audit-retry"),
       )).toMatchObject({ status: "delivered", attemptCount: 3 });
 
       probe.respondWith(400);
@@ -199,7 +203,7 @@ describe("append-only reliable batching", () => {
       expect(probe.requests).toHaveLength(5);
       const deadDiagnostics = await harness.admin.diagnostics();
       expect((deadDiagnostics.deliveries as Array<Record<string, unknown>>).find(
-        (delivery) => delivery.eventId === "audit-dead",
+        (delivery) => delivery.eventId === diagnosticId("audit-dead"),
       )).toMatchObject({
         status: "dead-letter",
         attemptCount: 1,

@@ -186,7 +186,7 @@ export class GenericHttpDriver implements Driver {
       if (response.statusCode === 408 || response.statusCode === 429 || response.statusCode >= 500) {
         return { status: "retry", detail: `HTTP ${response.statusCode}` };
       }
-      return { status: "dead-letter", detail: `HTTP ${response.statusCode}: ${response.body.slice(0, 200)}` };
+      return { status: "dead-letter", detail: `HTTP ${response.statusCode}` };
     } catch (error) {
       return { status: "retry", detail: error instanceof Error ? error.message : String(error) };
     }
