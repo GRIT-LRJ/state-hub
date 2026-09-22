@@ -6,6 +6,7 @@ import { StateHubDatabase } from "./database.js";
 import { DeliveryDispatcher } from "./dispatcher.js";
 import { DriverRegistry } from "./drivers.js";
 import { HubEventBus } from "./events.js";
+import { RetentionService } from "./retention.js";
 import { createServer } from "./server.js";
 import { StateHubService } from "./service.js";
 import { ClaimTtlScheduler } from "./ttl-scheduler.js";
@@ -18,6 +19,10 @@ mkdirSync(config.spoolDir, { recursive: true });
 const db = new StateHubDatabase(config.databasePath);
 const events = new HubEventBus();
 const service = new StateHubService(db, events);
+const retention = new RetentionService(db, {
+  maxAgeMs: config.retentionMaxAgeMs,
+  maxBytes: config.retentionMaxBytes,
+});
 
 if (config.bootstrapProducerId && config.bootstrapProducerToken) {
   registerProducer(db, config.bootstrapProducerId, config.bootstrapProducerToken);
@@ -58,7 +63,18 @@ try {
 
 ttlScheduler.start();
 dispatcher.start();
-const cleanupTimer = setInterval(() => service.cleanupHistory(), 60 * 60 * 1000);
+const runRetention = (): void => {
+  const report = retention.run();
+  if (report.protectedBytesOverBudget > 0) {
+    process.stderr.write(`${JSON.stringify({
+      type: "state-hub.retention-over-budget",
+      protectedBytesOverBudget: report.protectedBytesOverBudget,
+      retentionMaxBytes: retention.maxBytes,
+    })}\n`);
+  }
+};
+runRetention();
+const cleanupTimer = setInterval(runRetention, config.retentionIntervalMs);
 cleanupTimer.unref();
 process.stdout.write(`${JSON.stringify({ type: "state-hub.ready", ...discovery })}\n`);
 

@@ -29,6 +29,9 @@ interface WaitOptions {
 
 interface CoreAcceptanceHarnessOptions {
   deliveryLeaseMs?: number;
+  retentionMaxAgeMs?: number;
+  retentionMaxBytes?: number;
+  retentionIntervalMs?: number;
 }
 
 function delay(milliseconds: number): Promise<void> {
@@ -309,6 +312,10 @@ export class CoreAcceptanceHarness {
     return Boolean(this.#child && this.#child.exitCode === null && this.#child.signalCode === null);
   }
 
+  get stderrOutput(): string {
+    return this.#stderr;
+  }
+
   async fetch(path: string, init: RequestInit = {}): Promise<Response> {
     const signal = init.signal ?? AbortSignal.timeout(5_000);
     return await fetch(`http://${this.discovery.host}:${this.discovery.port}${path}`, { ...init, signal });
@@ -460,6 +467,9 @@ export class CoreAcceptanceHarness {
     delete childEnvironment.STATE_HUB_BOOTSTRAP_PRODUCER_ID;
     delete childEnvironment.STATE_HUB_BOOTSTRAP_TOKEN;
     delete childEnvironment.STATE_HUB_DELIVERY_LEASE_MS;
+    delete childEnvironment.STATE_HUB_RETENTION_MAX_AGE_MS;
+    delete childEnvironment.STATE_HUB_RETENTION_MAX_BYTES;
+    delete childEnvironment.STATE_HUB_RETENTION_INTERVAL_MS;
     const child = spawn(process.execPath, ["--import", "tsx", entrypoint], {
       cwd: coreRoot,
       windowsHide: true,
@@ -473,6 +483,15 @@ export class CoreAcceptanceHarness {
         STATE_HUB_PORT: "0",
         ...(this.options.deliveryLeaseMs
           ? { STATE_HUB_DELIVERY_LEASE_MS: String(this.options.deliveryLeaseMs) }
+          : {}),
+        ...(this.options.retentionMaxAgeMs
+          ? { STATE_HUB_RETENTION_MAX_AGE_MS: String(this.options.retentionMaxAgeMs) }
+          : {}),
+        ...(this.options.retentionMaxBytes
+          ? { STATE_HUB_RETENTION_MAX_BYTES: String(this.options.retentionMaxBytes) }
+          : {}),
+        ...(this.options.retentionIntervalMs
+          ? { STATE_HUB_RETENTION_INTERVAL_MS: String(this.options.retentionIntervalMs) }
           : {}),
       },
     });

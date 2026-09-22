@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
+import { dedupeIdentityHash } from "./dedupe-identity.js";
 
 const schema = String.raw`
 PRAGMA journal_mode = WAL;
@@ -43,6 +44,20 @@ CREATE TABLE IF NOT EXISTS commands (
   error_message TEXT,
   UNIQUE(producer_id, idempotency_key)
 );
+CREATE INDEX IF NOT EXISTS commands_completed_at ON commands(completed_at);
+
+CREATE TABLE IF NOT EXISTS command_dedupe (
+  producer_id TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+  command_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  request_hash TEXT,
+  status TEXT NOT NULL,
+  accepted_at TEXT NOT NULL,
+  completed_at TEXT,
+  PRIMARY KEY (producer_id, key_hash)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS command_dedupe_command ON command_dedupe(command_id);
 
 CREATE TABLE IF NOT EXISTS claims (
   producer_id TEXT NOT NULL,
@@ -83,6 +98,13 @@ CREATE TABLE IF NOT EXISTS occurrence_events (
   revision INTEGER NOT NULL,
   accepted_at TEXT NOT NULL,
   PRIMARY KEY (producer_id, event_id)
+);
+CREATE INDEX IF NOT EXISTS occurrence_events_accepted_at ON occurrence_events(accepted_at);
+
+CREATE TABLE IF NOT EXISTS event_dedupe (
+  producer_id TEXT NOT NULL,
+  event_id_hash TEXT NOT NULL,
+  PRIMARY KEY (producer_id, event_id_hash)
 );
 
 CREATE TABLE IF NOT EXISTS bindings (
@@ -140,6 +162,9 @@ CREATE TABLE IF NOT EXISTS deliveries (
   completed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS deliveries_ready ON deliveries(status, available_at, lease_until);
+CREATE INDEX IF NOT EXISTS deliveries_completed_at ON deliveries(completed_at);
+CREATE INDEX IF NOT EXISTS deliveries_command ON deliveries(command_id);
+CREATE INDEX IF NOT EXISTS deliveries_event ON deliveries(producer_id, event_id);
 
 CREATE TABLE IF NOT EXISTS delivery_attempts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -217,6 +242,46 @@ export class StateHubDatabase {
     this.raw.exec(
       "CREATE INDEX IF NOT EXISTS deliveries_open_batch ON deliveries(batch_key, status, attempt_count, available_at)",
     );
+    this.raw.transaction(() => {
+      const commandIdentity = this.raw.prepare(
+        `INSERT OR IGNORE INTO command_dedupe(
+           producer_id, key_hash, command_id, kind, request_hash, status, accepted_at, completed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      const commands = this.raw.prepare(
+        `SELECT producer_id, idempotency_key, id, kind, request_hash, status, accepted_at, completed_at
+         FROM commands WHERE idempotency_key IS NOT NULL`,
+      ).all() as Array<{
+        producer_id: string;
+        idempotency_key: string;
+        id: string;
+        kind: string;
+        request_hash: string | null;
+        status: string;
+        accepted_at: string;
+        completed_at: string | null;
+      }>;
+      for (const command of commands) {
+        commandIdentity.run(
+          command.producer_id,
+          dedupeIdentityHash(command.idempotency_key),
+          command.id,
+          command.kind,
+          command.request_hash,
+          command.status,
+          command.accepted_at,
+          command.completed_at,
+        );
+      }
+      const eventIdentity = this.raw.prepare(
+        "INSERT OR IGNORE INTO event_dedupe(producer_id, event_id_hash) VALUES (?, ?)",
+      );
+      const events = this.raw.prepare("SELECT producer_id, event_id FROM occurrence_events")
+        .all() as Array<{ producer_id: string; event_id: string }>;
+      for (const event of events) {
+        eventIdentity.run(event.producer_id, dedupeIdentityHash(event.event_id));
+      }
+    })();
   }
 
   close(): void {

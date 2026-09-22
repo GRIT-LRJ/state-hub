@@ -35,6 +35,8 @@ pnpm dev:core
 
 它只监听 `127.0.0.1` 随机端口，并将端口、PID 和 instance id 原子写入 current-user runtime 目录的 `discovery.json`。文件中不包含令牌。
 
+Core 启动时运行一次历史保留维护，之后默认每小时运行。生产默认边界为 7 天和 100 MiB，适用于可清理的业务与诊断数据；测试或受控诊断可用 `STATE_HUB_RETENTION_MAX_AGE_MS`、`STATE_HUB_RETENTION_MAX_BYTES` 与 `STATE_HUB_RETENTION_INTERVAL_MS` 注入更小的正整数阈值。容量是五类历史记录主要字段及轻量 command/event 去重身份的 UTF-8 逻辑字节总量，不以 SQLite 文件高水位计量；SQLite 会复用已释放页面。未完成 delivery 及其引用、去重身份不得为满足容量目标而删除；受保护数据超预算时，Core 在 stderr 输出 `state-hub.retention-over-budget` 结构化事件及超额字节数。
+
 ## 首次配置
 
 桌面首页的“配置 Codex + 虚拟输出”会：

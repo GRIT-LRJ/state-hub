@@ -316,7 +316,27 @@ export class StateHubService {
     const row = this.db.raw
       .prepare("SELECT * FROM commands WHERE id = ? AND producer_id = ?")
       .get(commandId, producerId) as CommandRow | undefined;
-    if (!row) return undefined;
+    if (!row) {
+      const identity = this.db.raw.prepare(
+        `SELECT command_id, kind, status, accepted_at, completed_at FROM command_dedupe
+         WHERE command_id = ? AND producer_id = ?`,
+      ).get(commandId, producerId) as {
+        command_id: string;
+        kind: CommandKind;
+        status: CommandResult["status"];
+        accepted_at: string;
+        completed_at: string | null;
+      } | undefined;
+      if (!identity) return undefined;
+      return {
+        commandId: identity.command_id,
+        producerId,
+        kind: identity.kind,
+        status: identity.status,
+        acceptedAt: identity.accepted_at,
+        ...(identity.completed_at ? { completedAt: identity.completed_at } : {}),
+      };
+    }
     return {
       commandId: row.id,
       producerId: row.producer_id,
@@ -437,10 +457,13 @@ export class StateHubService {
         if (validationError) throw new HubError("SOURCE_SCHEMA_VIOLATION", validationError, 422);
       },
       (commandId, revision, now) => {
+        const eventIdHash = dedupeIdentityHash(input.eventId);
         const duplicate = this.db.raw
-          .prepare("SELECT 1 FROM occurrence_events WHERE producer_id = ? AND event_id = ?")
-          .get(producerId, input.eventId);
+          .prepare("SELECT 1 FROM event_dedupe WHERE producer_id = ? AND event_id_hash = ?")
+          .get(producerId, eventIdHash);
         if (duplicate) return;
+        this.db.raw.prepare("INSERT INTO event_dedupe(producer_id, event_id_hash) VALUES (?, ?)")
+          .run(producerId, eventIdHash);
         const scopeId = input.scopeId ?? "default";
         this.touchScope(producerId, scopeId, input.sourceType, now);
         this.db.raw
@@ -765,27 +788,6 @@ export class StateHubService {
     };
   }
 
-  cleanupHistory(now = new Date()): void {
-    const cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    this.db.transaction(() => {
-      this.db.raw.prepare("DELETE FROM history WHERE created_at < ?").run(cutoff);
-      this.db.raw.prepare("DELETE FROM occurrence_events WHERE accepted_at < ?").run(cutoff);
-      this.db.raw.prepare("DELETE FROM deliveries WHERE completed_at < ?").run(cutoff);
-      this.db.raw.prepare("DELETE FROM commands WHERE completed_at < ?").run(cutoff);
-      const sizeQuery = this.db.raw.prepare(
-        "SELECT COALESCE(sum(length(payload_json) + length(kind) + COALESCE(length(subject_id), 0)), 0) AS bytes FROM history",
-      );
-      let size = (sizeQuery.get() as { bytes: number }).bytes;
-      while (size > 100 * 1024 * 1024) {
-        const removed = this.db.raw
-          .prepare("DELETE FROM history WHERE id IN (SELECT id FROM history ORDER BY id ASC LIMIT 1000)")
-          .run();
-        if (removed.changes === 0) break;
-        size = (sizeQuery.get() as { bytes: number }).bytes;
-      }
-    });
-  }
-
   private executeCommand(
     producerId: string,
     producerToken: string | undefined,
@@ -803,13 +805,17 @@ export class StateHubService {
       validate?.();
       if (idempotencyKey) {
         const existing = this.db.raw
-          .prepare("SELECT * FROM commands WHERE producer_id = ? AND idempotency_key = ?")
-          .get(producerId, idempotencyKey) as CommandRow | undefined;
+          .prepare("SELECT command_id, request_hash, accepted_at FROM command_dedupe WHERE producer_id = ? AND key_hash = ?")
+          .get(producerId, dedupeIdentityHash(idempotencyKey)) as {
+            command_id: string;
+            request_hash: string | null;
+            accepted_at: string;
+          } | undefined;
         if (existing) {
           if (existing.request_hash !== requestHash) {
             throw new HubError("IDEMPOTENCY_CONFLICT", "The idempotency key was used for a different request", 409);
           }
-          return { commandId: existing.id, status: "accepted" as const, acceptedAt: existing.accepted_at };
+          return { commandId: existing.command_id, status: "accepted" as const, acceptedAt: existing.accepted_at };
         }
       }
       const commandId = randomUUID();
@@ -820,11 +826,23 @@ export class StateHubService {
            VALUES (?, ?, ?, ?, ?, 'accepted', ?)`,
         )
         .run(commandId, producerId, kind, idempotencyKey ?? null, requestHash, now);
+      if (idempotencyKey) {
+        this.db.raw.prepare(
+          `INSERT INTO command_dedupe(
+             producer_id, key_hash, command_id, kind, request_hash, status, accepted_at
+           ) VALUES (?, ?, ?, ?, ?, 'accepted', ?)`,
+        ).run(producerId, dedupeIdentityHash(idempotencyKey), commandId, kind, requestHash, now);
+      }
       const revision = this.db.nextRevision();
       work(commandId, revision, now);
       this.db.raw
         .prepare("UPDATE commands SET status = 'applied', completed_at = ? WHERE id = ?")
         .run(now, commandId);
+      if (idempotencyKey) {
+        this.db.raw.prepare(
+          "UPDATE command_dedupe SET status = 'applied', completed_at = ? WHERE producer_id = ? AND key_hash = ?",
+        ).run(now, producerId, dedupeIdentityHash(idempotencyKey));
+      }
       return { commandId, status: "accepted" as const, acceptedAt: now };
     });
     this.events.publish("command.accepted", { producerId, kind, ...accepted });

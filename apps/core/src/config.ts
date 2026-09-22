@@ -10,9 +10,20 @@ export interface CoreConfig {
   host: "127.0.0.1";
   port: number;
   deliveryLeaseMs: number;
+  retentionMaxAgeMs: number;
+  retentionMaxBytes: number;
+  retentionIntervalMs: number;
   adminToken: string;
   bootstrapProducerId?: string;
   bootstrapProducerToken?: string;
+}
+
+function positiveInteger(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+  const value = Number.parseInt(env[name] ?? String(fallback), 10);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
 }
 
 function defaultDataDir(): string {
@@ -33,10 +44,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
   if (!adminToken || adminToken.length < 32) {
     throw new Error("STATE_HUB_ADMIN_TOKEN must be provided by the Tauri supervisor and contain at least 32 characters");
   }
-  const deliveryLeaseMs = Number.parseInt(env.STATE_HUB_DELIVERY_LEASE_MS ?? "30000", 10);
-  if (!Number.isSafeInteger(deliveryLeaseMs) || deliveryLeaseMs <= 0) {
-    throw new Error("STATE_HUB_DELIVERY_LEASE_MS must be a positive integer");
-  }
+  const deliveryLeaseMs = positiveInteger(env, "STATE_HUB_DELIVERY_LEASE_MS", 30_000);
+  const retentionMaxAgeMs = positiveInteger(env, "STATE_HUB_RETENTION_MAX_AGE_MS", 7 * 24 * 60 * 60 * 1000);
+  const retentionMaxBytes = positiveInteger(env, "STATE_HUB_RETENTION_MAX_BYTES", 100 * 1024 * 1024);
+  const retentionIntervalMs = positiveInteger(env, "STATE_HUB_RETENTION_INTERVAL_MS", 60 * 60 * 1000);
   return {
     dataDir,
     runtimeDir,
@@ -46,6 +57,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     host: "127.0.0.1",
     port: Number.parseInt(env.STATE_HUB_PORT ?? "0", 10),
     deliveryLeaseMs,
+    retentionMaxAgeMs,
+    retentionMaxBytes,
+    retentionIntervalMs,
     adminToken,
     ...(env.STATE_HUB_BOOTSTRAP_PRODUCER_ID
       ? { bootstrapProducerId: env.STATE_HUB_BOOTSTRAP_PRODUCER_ID }

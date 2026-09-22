@@ -69,6 +69,18 @@ async function failAtHistory(
   request: () => Promise<Response>,
 ): Promise<void> {
   const before = await harness.admin.snapshot();
+  const countDedupe = (): { commands: number; events: number } => {
+    const database = new Database(harness.paths.database, { readonly: true, fileMustExist: true });
+    try {
+      return {
+        commands: (database.prepare("SELECT count(*) AS count FROM command_dedupe").get() as { count: number }).count,
+        events: (database.prepare("SELECT count(*) AS count FROM event_dedupe").get() as { count: number }).count,
+      };
+    } finally {
+      database.close();
+    }
+  };
+  const beforeDedupe = countDedupe();
   const removeFailure = installHistoryFailure(harness.paths.database);
   try {
     await expectError(await request(), 500, "INTERNAL_ERROR");
@@ -76,6 +88,7 @@ async function failAtHistory(
     removeFailure();
   }
   expect(await harness.admin.snapshot()).toEqual(before);
+  expect(countDedupe()).toEqual(beforeDedupe);
 }
 
 function idempotencyHeader(key: string): HeadersInit {
