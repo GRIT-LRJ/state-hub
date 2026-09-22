@@ -155,3 +155,54 @@ PASS；Spec PASS；Correctness architecture PASS；Critical 0；High 0。`pnpm v
 ## 测试基础设施 — Core 冷启动争用
 
 七个验收文件并发运行时多次出现 Core 进程在 20 秒内没有输出或发现文件。将 Vitest worker 上限设为 2 后，单独验收和完整 `pnpm verify` 均通过，未放宽产品断言。Commit：`865bd5d`。
+
+
+## Issue #7 — 消除 ClaimIdentity 键碰撞
+
+### 这张 Issue 要解决什么
+
+让不同 producer、scope、signal 三元组始终是不同 claim，避免确认或通知转换串线。
+
+### 原来有什么问题
+
+旧身份直接用控制字符拼接。一个 scope 含分隔符与另一个 signal 含分隔符时会得到同一键。快照重复检查也用相同拼接；清理 transition 使用 SQL `LIKE`，producer ID 中的下划线会被当通配符。
+
+### 我改了什么
+
+`claimKey` 改为 JSON 元组编码；快照重复检查使用无歧义的 scope/signal 元组；替换快照时只按 prior claim 的精确键删除 transition。重复快照错误不再回显用户输入的 identity。
+
+### 为什么这样改
+
+JSON 数组编码对合法字符串元组是一一对应的，精确 SQL 键删除不会跨 producer 清理。
+
+### 哪些文件发生变化
+
+`packages/domain/src/index.ts`、`apps/core/src/service.ts`、对应领域/服务测试、`acceptance/claim-identity.acceptance.test.ts` 与验收 Harness。
+
+### 数据库是否变化
+
+没有 schema 或 backfill。本项目当前未要求旧版本正式用户数据迁移；旧格式的确认/transition 行不会与新格式身份混用。
+
+### 外部行为是否变化
+
+管理快照中的 `contributorClaimKeys` 改为 JSON 元组字符串。含旧分隔符的 HTTP claim 参数可以分别写入、确认和触发 transition。重复快照错误只返回安全类别。
+
+### 风险
+
+依赖旧 contributor 键文本格式的客户端需把该字段视为不透明身份。旧数据库已有确认记录不再匹配新编码；此兼容边界符合本 Issue 的明确范围。
+
+### 测试
+
+领域测试验证旧碰撞对的新键不同。真实 Core 验收在同一快照 revision 下确认一个 claim，检查另一个仍有效；通过编码 URL 写入两个 claim，观察两次 Virtual Driver 调用；还验证含下划线的 producer 替换快照不清掉另一 producer 的 transition。
+
+### Reviewer 曾发现的问题
+
+发现快照校验仍使用裸拼接，以及 SQL `LIKE` 的下划线通配符会跨 producer 清理。两处已一并改为精确元组身份和精确删除。
+
+### 最终状态
+
+PASS；Spec PASS；Correctness architecture PASS；Critical 0；High 0。`pnpm verify` 四项门禁通过。
+
+### Commit
+
+`ecd9ef6`。

@@ -10,7 +10,7 @@
 | #4 独立插件进程 | TODO | Critical | #3 / #2 | JSON-RPC、子进程与隔离 | 否，等待 #3 | 待运行 | 待审查 | — |
 | #5 插件旁路升级 | TODO | Critical | #4 / #2 | 升级校验与原子激活 | 否，等待 #4 | 待运行 | 待审查 | — |
 | #6 插件安全卸载 | TODO | Critical | #3 / #2 | 依赖检查与卸载 | 否，等待 #3 | 待运行 | 待审查 | — |
-| #7 ClaimIdentity 防碰撞 | TODO | High | 无 / #2 | 确认、转换、贡献者身份 | 是 | 待运行 | 待审查 | — |
+| #7 ClaimIdentity 防碰撞 | PASS | High | 无 / #2 | 确认、转换、贡献者身份 | 已完成 | PASS | Spec/Correctness PASS | ecd9ef6 |
 | #8 生产者事务边界 | PASS | 正确性基础 | 无 / #2 | 命令、账本、投影、outbox 原子提交 | 已完成 | PASS | PASS | a417699 |
 | #9 TTL 与投影 revision | PASS | 正确性基础 | 无 / #2 | 到期调度、回落、旧投影抑制 | 已完成 | PASS | PASS | 6d166a6、c9786f0 |
 | #10 配置生命周期 | TODO | High | #3 / #2 | 校验、revision、驱动热激活 | 否，等待 #3 | 待运行 | 待审查 | — |
