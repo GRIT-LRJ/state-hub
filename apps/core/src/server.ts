@@ -451,20 +451,36 @@ export function createServer(options: ServerOptions): FastifyInstance {
       }
     })));
 
+  app.get("/api/v1/admin/producers", { preHandler: adminAuth }, async () => ({
+    producers: options.service.db.raw.prepare(
+      "SELECT producer_id AS producerId, source_definition_id AS sourceDefinitionId, created_at AS createdAt, revoked_at AS revokedAt FROM producer_tokens ORDER BY producer_id",
+    ).all(),
+  }));
+
   app.post("/api/v1/admin/producers", { preHandler: adminAuth }, async (request, reply) => {
-    const body = request.body as { producerId?: string; sourceDefinitionId?: string };
-    if (!body.producerId || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(body.producerId)) {
+    const body = (request.body ?? {}) as { producerId?: unknown; sourceDefinitionId?: unknown };
+    if (typeof body.producerId !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(body.producerId)) {
       return await reply.code(400).send({ error: { code: "INVALID_PRODUCER_ID", message: "Invalid producer id" } });
     }
-    if (
-      body.sourceDefinitionId &&
-      !plugins.sourceDefinition(body.sourceDefinitionId)
-    ) {
+    if (body.sourceDefinitionId !== undefined &&
+      (typeof body.sourceDefinitionId !== "string" || !plugins.sourceDefinition(body.sourceDefinitionId))) {
       return await reply.code(400).send({ error: { code: "UNKNOWN_SOURCE_DEFINITION", message: "Unknown source definition" } });
     }
     const token = generateToken();
     registerProducer(options.service.db, body.producerId, token, body.sourceDefinitionId);
     return await reply.code(201).send({ producerId: body.producerId, token });
+  });
+
+  app.post("/api/v1/admin/producers/:producerId/revoke", { preHandler: adminAuth }, async (request, reply) => {
+    const { producerId } = request.params as { producerId: string };
+    const result = options.service.db.raw.prepare(
+      "UPDATE producer_tokens SET revoked_at = ? WHERE producer_id = ? AND revoked_at IS NULL",
+    ).run(new Date().toISOString(), producerId);
+    if (result.changes === 0) {
+      return await reply.code(404).send({ error: { code: "PRODUCER_NOT_ACTIVE", message: "Producer not active" } });
+    }
+    return await reply.code(204).send();
   });
 
   app.post("/api/v1/admin/outputs/pause", { preHandler: adminAuth }, async (request, reply) => {

@@ -173,6 +173,7 @@ interface PushPlusConfig {
   tokenSecretRef: string;
   topic?: string;
   endpoint?: string;
+  privateTargetOrigin?: string;
 }
 
 export class PushPlusDriver implements Driver {
@@ -182,8 +183,10 @@ export class PushPlusDriver implements Driver {
   ) {}
 
   async execute(request: DriverActionRequest): Promise<DriverActionResult> {
-    const token = await this.secrets.get(this.config.tokenSecretRef);
-    if (!token) return { status: "dead-letter", detail: "OS credential is unavailable; plaintext fallback is forbidden" };
+    let token: string | undefined;
+    try { token = await this.secrets.get(this.config.tokenSecretRef); }
+    catch { return { status: "dead-letter", detail: "CREDENTIAL_UNAVAILABLE" }; }
+    if (!token) return { status: "dead-letter", detail: "CREDENTIAL_UNAVAILABLE" };
     const items = request.batch ?? [{
       deliveryId: request.deliveryId,
       ...(request.producerId ? { producerId: request.producerId } : {}),
@@ -198,6 +201,7 @@ export class PushPlusDriver implements Driver {
       const response = await pinnedJsonRequest(
         {
           baseUrl: this.config.endpoint ?? "https://www.pushplus.plus/send",
+          ...(this.config.privateTargetOrigin ? { privateTargetOrigin: this.config.privateTargetOrigin } : {}),
           method: "POST",
           timeoutMs: 10_000,
         },
@@ -210,12 +214,23 @@ export class PushPlusDriver implements Driver {
           ...(this.config.topic ? { topic: this.config.topic } : {}),
         },
       );
-      if (response.statusCode >= 200 && response.statusCode < 300) return { status: "delivered" };
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        let receipt: unknown;
+        try { receipt = JSON.parse(response.body); }
+        catch { return { status: "retry", detail: "PUSHPLUS_INVALID_RESPONSE" }; }
+        const code = receipt && typeof receipt === "object" && !Array.isArray(receipt)
+          ? (receipt as { code?: unknown }).code : undefined;
+        if (typeof code !== "number" || !Number.isInteger(code) || code < 100 || code > 999) {
+          return { status: "retry", detail: "PUSHPLUS_INVALID_RESPONSE" };
+        }
+        if (code === 200) return { status: "delivered" };
+        return { status: code === 500 ? "retry" : "dead-letter", detail: `PushPlus code ${code}` };
+      }
       return response.statusCode === 429 || response.statusCode >= 500
         ? { status: "retry", detail: `PushPlus HTTP ${response.statusCode}` }
         : { status: "dead-letter", detail: `PushPlus HTTP ${response.statusCode}` };
-    } catch (error) {
-      return { status: "retry", detail: error instanceof Error ? error.message : String(error) };
+    } catch {
+      return { status: "retry", detail: "PUSHPLUS_TRANSPORT_FAILED" };
     }
   }
 }

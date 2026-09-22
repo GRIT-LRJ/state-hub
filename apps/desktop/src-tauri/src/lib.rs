@@ -1,3 +1,4 @@
+mod credentials;
 mod supervisor;
 
 use supervisor::{shutdown_core, start_supervisor, CoreState};
@@ -6,22 +7,6 @@ use tauri::{
     tray::TrayIconBuilder,
     Manager,
 };
-
-#[tauri::command]
-fn store_secret(reference: String, value: String) -> Result<(), String> {
-    keyring::Entry::new("dev.statehub.desktop", &reference)
-        .map_err(|error| error.to_string())?
-        .set_password(&value)
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn delete_secret(reference: String) -> Result<(), String> {
-    keyring::Entry::new("dev.statehub.desktop", &reference)
-        .map_err(|error| error.to_string())?
-        .delete_credential()
-        .map_err(|error| error.to_string())
-}
 
 async fn set_paused(app: tauri::AppHandle, paused: bool) {
     let connection = app
@@ -96,8 +81,9 @@ pub fn run() {
         }))
         .invoke_handler(tauri::generate_handler![
             supervisor::core_connection,
-            store_secret,
-            delete_secret
+            credentials::store_secret,
+            credentials::secret_status,
+            credentials::delete_secret
         ])
         .setup(|app| {
             create_tray(app)?;

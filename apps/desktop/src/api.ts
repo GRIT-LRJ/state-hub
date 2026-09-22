@@ -39,7 +39,7 @@ export async function getConnection(): Promise<CoreConnection> {
   return await invoke<CoreConnection>("core_connection");
 }
 
-async function coreFetch(path: string, init?: RequestInit, connection?: CoreConnection): Promise<Response> {
+export async function coreFetch(path: string, init?: RequestInit, connection?: CoreConnection): Promise<Response> {
   const current = connection ?? await getConnection();
   const headers = new Headers(init?.headers);
   headers.set("authorization", `Bearer ${current.adminToken}`);

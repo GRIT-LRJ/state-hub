@@ -96,6 +96,7 @@ export const driverDefinitions: DriverDefinition[] = [
         tokenSecretRef: { type: "string", format: "statehub-secret-ref" },
         topic: { type: "string" },
         endpoint: { type: "string", format: "uri", pattern: "^https?://" },
+        privateTargetOrigin: { type: "string", format: "uri", pattern: "^https?://" },
       },
     },
     actions: {

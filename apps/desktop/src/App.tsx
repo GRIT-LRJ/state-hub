@@ -12,6 +12,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { fetchSnapshot, getConnection, provisionCodexVirtual, publishConfig, setOutputsPaused, subscribe, type RuntimeSnapshot } from "./api.js";
 import { CoreConnectionLoop } from "./connection-loop.js";
+import { SourceManager } from "./SourceManager.js";
 import "./app.css";
 
 const { Header, Content, Footer } = Layout;
@@ -118,6 +119,7 @@ export default function App() {
               action={<Button type="primary" loading={busy} onClick={() => void quickstart()}>{t("configureCodex")}</Button>}
             />
           )}
+          <SourceManager disabled={!snapshot} onPublished={refresh} />
           <Flex gap="middle" wrap="wrap" className="stats">
             <Card><Statistic title={t("revision")} value={snapshot?.revision ?? 0} /></Card>
             <Card><Statistic title={t("claims")} value={snapshot?.claims.length ?? 0} prefix={<BellOutlined />} /></Card>

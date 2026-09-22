@@ -16,3 +16,15 @@ body { margin: 0; min-width: 760px; min-height: 100vh; }
 .data-card { box-shadow: 0 8px 28px rgba(24, 24, 48, .05); }
 .data-card code { display: inline-block; max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #4e4e74; }
 .footer { text-align: center; color: #74748a; background: transparent; }
+
+.management-panels { width: 100%; }
+.management-panels > .ant-space-item { width: 100%; }
+.management-form { width: 100%; }
+.management-form label { display: grid; gap: 5px; max-width: 520px; }
+.management-form input, .management-form select { min-height: 34px; padding: 5px 9px; border: 1px solid #c8c8d4; border-radius: 6px; background: #fff; }
+.management-form .issued-token { display: grid; gap: 8px; max-width: 520px; }
+.management-form .issued-token input { width: 100%; }
+.managed-producers { display: grid; gap: 8px; width: 100%; }
+.managed-producers > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 720px; }
+.management-preview { width: 100%; max-width: 720px; }
+.management-preview pre { max-height: 240px; overflow: auto; padding: 12px; background: #f7f7fa; }

@@ -194,8 +194,12 @@ export function validatePublishedConfig(config: unknown, plugins: PluginReposito
     if (!definition) throw new ConfigValidationError("UNKNOWN_DRIVER_TYPE");
     if (!validator(definition.configSchema)(instance.config)) throw new ConfigValidationError("INVALID_DRIVER_CONFIG");
     if (definition.id === "official.http") validateHttpConfig(instance.config);
-    if (definition.id === "official.pushplus" && instance.config.endpoint !== undefined) {
-      validateHttpConfig({ baseUrl: instance.config.endpoint });
+    if (definition.id === "official.pushplus") {
+      validateHttpConfig({
+        baseUrl: instance.config.endpoint ?? "https://www.pushplus.plus/send",
+        ...(instance.config.privateTargetOrigin === undefined ? {} :
+          { privateTargetOrigin: instance.config.privateTargetOrigin }),
+      });
     }
     if (instance.physicalResourceKey) {
       if (physicalKeys.has(instance.physicalResourceKey)) throw new ConfigValidationError("PHYSICAL_RESOURCE_CONFLICT", 409);
