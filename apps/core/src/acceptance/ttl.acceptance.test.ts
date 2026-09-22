@@ -1,4 +1,5 @@
 import type { Binding } from "@state-hub/protocol";
+import { claimKey } from "@state-hub/domain";
 import { expect, it } from "vitest";
 import { CoreAcceptanceHarness } from "./harness.js";
 
@@ -77,7 +78,7 @@ it("actively expires, falls back, arbitrates by claim revision, and recovers TTL
       const projection = snapshot.projections.find((item) => item.resourceChannel === "status");
       return projection?.action?.params.phase === "newer" ? projection : false;
     }, { description: "latest claim revision to win arbitration" });
-    expect(revisionWinner.contributorClaimKeys).toContain("ttl-acceptance\u001fz-newer\u001fstatus");
+    expect(revisionWinner.contributorClaimKeys).toContain(claimKey("ttl-acceptance", "z-newer", "status"));
 
     await producer.upsertClaim("fallback", "restart-fallback", {
       value: { phase: "restart-fallback" },

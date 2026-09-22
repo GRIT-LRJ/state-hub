@@ -5,6 +5,7 @@ import {
   bindingMatchesClaim,
   buildAction,
   candidateFromClaim,
+  claimKey,
   effectiveClaim,
   stableStringify,
 } from "./index.js";
@@ -37,6 +38,16 @@ const claim: StateClaim = {
   urgency: "action-required",
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
+
+describe("claim identity", () => {
+  it("encodes every tuple unambiguously even when fields contain the old separator", () => {
+    const first = claimKey("producer", "alpha\u001fbeta", "gamma");
+    const second = claimKey("producer", "alpha", "beta\u001fgamma");
+    expect(first).not.toBe(second);
+    expect(JSON.parse(first)).toEqual(["producer", "alpha\u001fbeta", "gamma"]);
+    expect(JSON.parse(second)).toEqual(["producer", "alpha", "beta\u001fgamma"]);
+  });
+});
 
 describe("binding", () => {
   it("matches structured selectors and maps without executing code", () => {

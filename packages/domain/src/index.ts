@@ -18,7 +18,7 @@ const urgencyRank: Record<Urgency, number> = {
 };
 
 export function claimKey(producerId: string, scopeId: string, signalId: string): string {
-  return `${producerId}\u001f${scopeId}\u001f${signalId}`;
+  return JSON.stringify([producerId, scopeId, signalId]);
 }
 
 export function resourceKey(driverInstanceId: string, resourceChannel: string): string {

@@ -236,6 +236,13 @@ export class AdminClient {
     return await responseJson<RuntimeSnapshot>(await this.request("/api/v1/admin/snapshot"));
   }
 
+  async acknowledge(producerId: string, scopeId: string, signalId: string, claimRevision: number): Promise<Response> {
+    return await this.request("/api/v1/admin/acknowledgements", {
+      method: "POST",
+      body: JSON.stringify({ producerId, scopeId, signalId, claimRevision }),
+    });
+  }
+
   async setPaused(paused: boolean): Promise<void> {
     await responseJson<{ paused: boolean }>(await this.request("/api/v1/admin/outputs/pause", {
       method: "POST",

@@ -514,19 +514,25 @@ export class StateHubService {
       () => {
         const identities = new Set<string>();
         for (const claim of claims) {
-          const identity = `${claim.scopeId}\u001f${claim.signalId}`;
-          if (identities.has(identity)) throw new HubError("DUPLICATE_SNAPSHOT_CLAIM", identity);
+          const identity = JSON.stringify([claim.scopeId, claim.signalId]);
+          if (identities.has(identity)) throw new HubError("DUPLICATE_SNAPSHOT_CLAIM", "Snapshot contains a duplicate claim identity");
           identities.add(identity);
           const validationError = validateClaimValue(this.db, producerId, claim.signalId, claim.value);
           if (validationError) throw new HubError("SOURCE_SCHEMA_VIOLATION", validationError, 422);
         }
       },
       (commandId, revision, now) => {
+        const priorClaims = this.db.raw
+          .prepare("SELECT scope_id, signal_id FROM claims WHERE producer_id = ?")
+          .all(producerId) as Array<{ scope_id: string; signal_id: string }>;
+        const deleteTransition = this.db.raw.prepare(
+          "DELETE FROM binding_transitions WHERE input_key = ?",
+        );
+        for (const priorClaim of priorClaims) {
+          deleteTransition.run(claimKey(producerId, priorClaim.scope_id, priorClaim.signal_id));
+        }
         this.db.raw.prepare("DELETE FROM claims WHERE producer_id = ?").run(producerId);
         this.db.raw.prepare("DELETE FROM claim_expirations WHERE producer_id = ?").run(producerId);
-        this.db.raw
-          .prepare("DELETE FROM binding_transitions WHERE input_key LIKE ?")
-          .run(`${producerId}\u001f%`);
         for (const input of claims) {
           this.touchScope(producerId, input.scopeId, input.sourceType, now);
           this.db.raw

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Binding } from "@state-hub/protocol";
+import { claimKey } from "@state-hub/domain";
 import { registerProducer } from "./auth.js";
 import { StateHubDatabase } from "./database.js";
 import { DeliveryDispatcher } from "./dispatcher.js";
@@ -167,8 +168,8 @@ describe("StateHub vertical slice", () => {
     expect(service.snapshot().projections[0]).toMatchObject({
       revision: initial?.revision,
       contributorClaimKeys: expect.arrayContaining([
-        "codex\u001fwinner\u001fstatus",
-        "codex\u001flower\u001fstatus",
+        claimKey("codex", "winner", "status"),
+        claimKey("codex", "lower", "status"),
       ]),
     });
 
