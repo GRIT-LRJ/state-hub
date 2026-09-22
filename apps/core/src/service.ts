@@ -1012,7 +1012,7 @@ export class StateHubService {
           ...(deliveryDelayMs > 0 ? { delayMs: deliveryDelayMs } : {}),
           ...(batchWindowMs > 0
             ? {
-                batchKey: `${binding.id}\u001f${action.name}`,
+                batchKey: JSON.stringify([binding.id, action.name]),
                 batchWindowMs,
               }
             : {}),

@@ -6,6 +6,7 @@ import {
   buildAction,
   candidateFromClaim,
   claimKey,
+  resourceKey,
   effectiveClaim,
   stableStringify,
 } from "./index.js";
@@ -46,6 +47,14 @@ describe("claim identity", () => {
     expect(first).not.toBe(second);
     expect(JSON.parse(first)).toEqual(["producer", "alpha\u001fbeta", "gamma"]);
     expect(JSON.parse(second)).toEqual(["producer", "alpha", "beta\u001fgamma"]);
+  });
+
+  it("keeps distinct driver/channel tuples separate even with the old delimiter", () => {
+    const first = resourceKey("virtual\u001fleft", "right");
+    const second = resourceKey("virtual", "left\u001fright");
+    expect(first).not.toBe(second);
+    expect(JSON.parse(first)).toEqual(["virtual\u001fleft", "right"]);
+    expect(JSON.parse(second)).toEqual(["virtual", "left\u001fright"]);
   });
 });
 

@@ -72,7 +72,7 @@ HTTP/CLI/plugin
 
 SQLite 使用 WAL、foreign keys 和 busy timeout。可清理的业务与诊断历史滚动保留 7 天或 100 MB，以先到者为准。容量预算按 UTF-8 字节统一统计 history、OccurrenceEvent、delivery action、delivery attempt、command 及其轻量去重身份。年龄清理先删除已完成 delivery（attempt 随外键级联），再删除已无 delivery 引用的 event/command，最后删除独立 history；容量清理在同一可清理集合中按最旧优先收缩。`pending`/`leased` delivery 及其 event、command 和 attempts 是恢复状态，不得清理；command 幂等键与 eventId 的哈希身份独立持久保存，不随完整记录清理，且无擅定到期窗口。claims、projections 和活动配置不属于历史清理集合。若受保护恢复状态或去重身份自身超过预算，Core 保留正确性并报告无法安全释放的超额，而不破坏 retry、幂等或恢复语义。
 
-claim revision 是输入事实的服务端顺序并用于仲裁；config revision 只标识不可变配置版本；projection revision 使用独立单调序列，表示某资源有效 stateful action 的输出代次。只有有效 action（包括 idle/null）变化才推进 projection revision，并在同一事务创建相同 revision 的 stateful outbox delivery。contributors 或 urgency 等仅管理面的变化不推进输出代次。
+claim revision 是输入事实的服务端顺序并用于仲裁；config revision 只标识不可变配置版本；projection revision 使用独立单调序列，表示某资源有效 stateful action 的输出代次。只有有效 action（包括 idle/null）变化才推进 projection revision，并在同一事务创建相同 revision 的 stateful outbox delivery。contributors 或 urgency 等仅管理面的变化不推进输出代次。 DriverInstance 与 resourceChannel 的持久资源键使用无歧义元组编码，启动时在单个 SQLite 事务中回填旧投影键；append-only 批次兼容键同样使用绑定 id 与 action name 的无歧义元组。
 
 Core 在调用 driver 前比较 delivery 与 SQLite 当前 projection revision，并以 lease 值作为完成/重试写回的 fencing token。Core 或 driver 恢复只重放 SQLite 中每个资源的当前 projection；旧 stateful revision 被抑制，queued-effect 跨恢复边界被抑制，append-only 保持可恢复。对于 Generic HTTP，stateful 请求携带 `projectionRevision`，但 Core 无法撤销已经发出的远端请求；需要端到端“旧请求绝不晚到覆盖”时，目标端必须持久记录最高 revision 并拒绝更小的 revision。未实现该 CAS/fencing 合约的 HTTP 目标只具备 Core dispatch 前的陈旧任务防护。
 

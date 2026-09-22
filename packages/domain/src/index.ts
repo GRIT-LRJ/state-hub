@@ -22,7 +22,7 @@ export function claimKey(producerId: string, scopeId: string, signalId: string):
 }
 
 export function resourceKey(driverInstanceId: string, resourceChannel: string): string {
-  return `${driverInstanceId}\u001f${resourceChannel}`;
+  return JSON.stringify([driverInstanceId, resourceChannel]);
 }
 
 export function stableStringify(value: unknown): string {

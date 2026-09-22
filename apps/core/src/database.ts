@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 import { dedupeIdentityHash } from "./dedupe-identity.js";
+import { resourceKey } from "@state-hub/domain";
 
 const schema = String.raw`
 PRAGMA journal_mode = WAL;
@@ -243,6 +244,18 @@ export class StateHubDatabase {
       "CREATE INDEX IF NOT EXISTS deliveries_open_batch ON deliveries(batch_key, status, attempt_count, available_at)",
     );
     this.raw.transaction(() => {
+      const projectionRows = this.raw.prepare(
+        "SELECT resource_key, driver_instance_id, resource_channel FROM projections",
+      ).all() as Array<{ resource_key: string; driver_instance_id: string; resource_channel: string }>;
+      const updateProjectionKey = this.raw.prepare(
+        "UPDATE projections SET resource_key = ? WHERE resource_key = ?",
+      );
+      for (const projection of projectionRows) {
+        const canonicalKey = resourceKey(projection.driver_instance_id, projection.resource_channel);
+        if (canonicalKey !== projection.resource_key) {
+          updateProjectionKey.run(canonicalKey, projection.resource_key);
+        }
+      }
       const commandIdentity = this.raw.prepare(
         `INSERT OR IGNORE INTO command_dedupe(
            producer_id, key_hash, command_id, kind, request_hash, status, accepted_at, completed_at
