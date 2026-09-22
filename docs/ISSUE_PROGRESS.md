@@ -7,8 +7,8 @@
 | #1 总规格 | IN PROGRESS | 总验收 | 所有子 Issue | 全系统最终黑盒/白盒验收 | 否，等待子项 | 待最终审查 | 待最终审查 | — |
 | #2 Core 验收 Harness | PASS | 基础 | 无 / 无 | 真实 Core HTTP/SSE 测试基础 | 已完成 | PASS | PASS | e99f6cc |
 | #3 插件安装、信任与 Catalog | PASS | Critical | 无 / #2 | 持久验包、publisher 信任、动态定义与来源校验 | 已完成 | pnpm verify PASS | Spec/Correctness/Security PASS | c42694a |
-| #4 独立插件进程 | TODO | Critical | #3 / #2 | JSON-RPC、子进程与隔离 | 是 | 待运行 | 待审查 | — |
-| #5 插件旁路升级 | TODO | Critical | #4 / #2 | 升级校验与原子激活 | 否，等待 #4 | 待运行 | 待审查 | — |
+| #4 独立插件进程 | PASS | Critical | #3 / #2 | 子进程、握手、健康、故障隔离与 stateful 恢复 | 已完成 | pnpm verify PASS | Spec/Correctness/Security/Recovery PASS | 20ed2e4 |
+| #5 插件旁路升级 | TODO | Critical | #4 / #2 | 升级校验与原子激活 | 是 | 待运行 | 待审查 | — |
 | #6 插件安全卸载 | TODO | Critical | #3 / #2 | 依赖检查与卸载 | 是 | 待运行 | 待审查 | — |
 | #7 ClaimIdentity 防碰撞 | PASS | High | 无 / #2 | 确认、转换、贡献者、资源身份 | 已完成 | PASS | Spec/Correctness PASS | ecd9ef6、b5f47f4 |
 | #8 生产者事务边界 | PASS | 正确性基础 | 无 / #2 | 命令、账本、投影、outbox 原子提交 | 已完成 | PASS | PASS | a417699 |
@@ -22,10 +22,10 @@
 | #16 Sidecar 与 SSE 恢复 | TODO | High | 无 / #2 | 桌面进程监督、快照后订阅 | 是 | 待运行 | 待审查 | — |
 | #17 来源与 PushPlus 管理 | TODO | High | 无 / #2、#16 | 来源、凭据引用、UI | 是 | 待运行 | 待审查 | — |
 | #18 驱动与配置管理 UI | TODO | High | #10 / #2、#16 | DriverInstance、Binding、revision UI | 否，等待 #10 | 待运行 | 待审查 | — |
-| #19 暂停、确认与诊断 UI | TODO | High | #7、#14 / #2、#16 | 运行管理、确认、支持包 | 否，等待 #7、#14 | 待运行 | 待审查 | — |
+| #19 暂停、确认与诊断 UI | TODO | High | #7、#14 / #2、#16 | 运行管理、确认、支持包 | 是 | 待运行 | 待审查 | — |
 | #20 Codex spool 验收 | TODO | High | 无 / #2、#8、#9 | hook、spool、drain 黑盒验收 | 是 | 待运行 | 待审查 | — |
 | #21 VK87 契约验收 | TODO | High | 无 / #2 | fake HID、选择器、65 字节 profile | 是 | 待运行 | 待审查 | — |
-| #22 容量与延迟验收 | TODO | Medium | #2、#8、#9、#10、#12、#13、#15 / 无 | 真实 Core 压测 | 否，等待 #10、#13、#15 | 待运行 | 待审查 | — |
+| #22 容量与延迟验收 | TODO | Medium | #2、#8、#9、#10、#12、#13、#15 / 无 | 真实 Core 压测 | 否，等待 #10 | 待运行 | 待审查 | — |
 | #23 Packaging 与 Updater | TODO | High | 无 / #2、#16、#17、#18、#19、#22 | 三平台安装与升级 smoke | 是，基础设施可先做 | 待运行 | 待审查 | — |
 | #24 Stable 发布门禁 | TODO | High | #23 / #3–#22 | 签名、公证、provenance、stable gate | 否，等待 #23 | 待运行 | 待审查 | — |
 
