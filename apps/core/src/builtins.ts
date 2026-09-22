@@ -72,7 +72,7 @@ export const driverDefinitions: DriverDefinition[] = [
       properties: {
         baseUrl: { type: "string", format: "uri", pattern: "^https?://" },
         method: { enum: ["POST", "PUT"], default: "POST" },
-        allowPrivateNetwork: { type: "boolean", default: false },
+        privateTargetOrigin: { type: "string", format: "uri", pattern: "^https?://" },
         timeoutMs: { type: "integer", minimum: 100, maximum: 30000, default: 5000 },
       },
     },

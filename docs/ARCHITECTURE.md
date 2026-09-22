@@ -106,7 +106,7 @@ Core 只监听 loopback 随机端口，并写 current-user discovery 文件。�
 - Virtual Driver：首启向导和测试的默认输出。
 - Codex Source：短同步 hook 调用 `state-hub-emit`；CLI 先原子写 spool，再尝试 Core，失败时 fail-open。
 - PushPlus Driver：受密钥引用保护的 append-only 通知。
-- Generic HTTP Driver：目标必须显式配置；默认拒绝 loopback、link-local、metadata endpoint 和私网，私网需逐目标授权并在解析后再次校验。
+- Generic HTTP Driver：目标必须显式配置；默认拒绝 loopback、link-local、metadata endpoint、私网和特殊用途地址。需要访问具体 loopback/私网目标时，配置 `privateTargetOrigin`，其规范化的 scheme/host/port 必须与 `baseUrl` 完全一致；旧 `allowPrivateNetwork` 开关不再授予权限。每次请求校验全部 DNS 答案，拒绝危险答案和公网/私网混合答案，并将传输连接固定到本次已校验的地址；Host 头不得覆盖目标。
 - VK87 Driver：仅允许 `VID 0x374A / PID 0xA270 / usagePage 0xFFFF / usage 0x0002`，且只加载校验通过的 65 字节 profile。旧 exe 仅可用于迁移期 shadow/fallback，不是运行依赖。
 
 ## 8. 性能、可观测与验收

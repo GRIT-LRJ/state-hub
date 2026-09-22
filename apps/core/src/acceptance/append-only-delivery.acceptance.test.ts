@@ -118,7 +118,7 @@ describe("append-only reliable batching", () => {
           id: "append-http",
           driverType: "http",
           enabled: true,
-          config: { baseUrl: probe.url, allowPrivateNetwork: true, timeoutMs: 5_000 },
+          config: { baseUrl: probe.url, privateTargetOrigin: new URL(probe.url).origin, timeoutMs: 5_000 },
         }],
       });
       const command = await producer.emitEvent({
@@ -199,7 +199,7 @@ describe("append-only reliable batching", () => {
           id: "append-http",
           driverType: "http",
           enabled: true,
-          config: { baseUrl: probe.url, allowPrivateNetwork: true },
+          config: { baseUrl: probe.url, privateTargetOrigin: new URL(probe.url).origin },
         }],
       });
       for (const [index, value] of sensitive.entries()) {
@@ -239,7 +239,7 @@ describe("append-only reliable batching", () => {
           id: "append-http",
           driverType: "http",
           enabled: true,
-          config: { baseUrl: probe.url, allowPrivateNetwork: true },
+          config: { baseUrl: probe.url, privateTargetOrigin: new URL(probe.url).origin },
         }],
       });
 

@@ -1,11 +1,11 @@
 import { lookup } from "node:dns/promises";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { isIP } from "node:net";
 import { AsyncEntry } from "@napi-rs/keyring";
 import type { ActionPayload, DriverActionRequest, DriverActionResult } from "@state-hub/protocol";
 import type { StateHubDatabase } from "./database.js";
 import type { HubEventBus } from "./events.js";
+import { authorizeHttpTarget, type ResolvedTargetAddress } from "./http-target-policy.js";
 
 export interface Driver {
   execute(request: DriverActionRequest): Promise<DriverActionResult>;
@@ -70,54 +70,24 @@ interface HttpDriverConfig {
   baseUrl: string;
   method?: "POST" | "PUT";
   headers?: Record<string, string>;
-  allowPrivateNetwork?: boolean;
+  privateTargetOrigin?: string;
   timeoutMs?: number;
   maxResponseBytes?: number;
-}
-
-function isBlockedAddress(address: string): boolean {
-  if (isIP(address) === 4) {
-    const octets = address.split(".").map(Number);
-    const [a = 0, b = 0] = octets;
-    return (
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      a >= 224
-    );
-  }
-  const normalized = address.toLowerCase();
-  return (
-    normalized === "::" ||
-    normalized === "::1" ||
-    normalized.startsWith("fe80:") ||
-    normalized.startsWith("fc") ||
-    normalized.startsWith("fd") ||
-    normalized.startsWith("::ffff:127.") ||
-    normalized.startsWith("::ffff:10.") ||
-    normalized.startsWith("::ffff:192.168.")
-  );
 }
 
 async function pinnedJsonRequest(
   config: HttpDriverConfig,
   payload: unknown,
+  resolveAddresses: (hostname: string) => Promise<ResolvedTargetAddress[]> = (hostname) => lookup(hostname, { all: true, verbatim: true }),
 ): Promise<{ statusCode: number; body: string }> {
   const url = new URL(config.baseUrl);
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("Only HTTP(S) targets are allowed");
   if (url.username || url.password) throw new Error("Credentials in target URLs are forbidden");
-  const resolved = await lookup(url.hostname, { all: true, verbatim: true });
-  if (resolved.length === 0) throw new Error("Target hostname did not resolve");
-  if (!config.allowPrivateNetwork && resolved.some((entry) => isBlockedAddress(entry.address))) {
-    throw new Error("Target resolves to a blocked private, local, or special-use address");
-  }
-  const selected = resolved[0];
-  if (!selected) throw new Error("Target hostname did not resolve");
+  const resolved = await resolveAddresses(url.hostname);
+  const selected = authorizeHttpTarget(url, config.privateTargetOrigin, resolved);
   const data = Buffer.from(JSON.stringify(payload), "utf8");
   for (const name of Object.keys(config.headers ?? {})) {
+    if (/^host$/iu.test(name)) throw new Error("HTTP Host header must match the authorized target");
     if (/^(authorization|cookie|proxy-authorization|x-api-key)$/iu.test(name)) {
       throw new Error(`Sensitive header ${name} must use a credential reference, not inline configuration`);
     }
@@ -166,7 +136,10 @@ async function pinnedJsonRequest(
 }
 
 export class GenericHttpDriver implements Driver {
-  constructor(private readonly config: HttpDriverConfig) {}
+  constructor(
+    private readonly config: HttpDriverConfig,
+    private readonly resolveAddresses?: (hostname: string) => Promise<ResolvedTargetAddress[]>,
+  ) {}
 
   async execute(request: DriverActionRequest): Promise<DriverActionResult> {
     try {
@@ -181,7 +154,7 @@ export class GenericHttpDriver implements Driver {
         ...(request.batchId ? { batchId: request.batchId } : {}),
         ...(request.batch ? { batch: request.batch } : {}),
         ...(request.projectionRevision === undefined ? {} : { projectionRevision: request.projectionRevision }),
-      });
+      }, this.resolveAddresses);
       if (response.statusCode >= 200 && response.statusCode < 300) return { status: "delivered" };
       if (response.statusCode === 408 || response.statusCode === 429 || response.statusCode >= 500) {
         return { status: "retry", detail: `HTTP ${response.statusCode}` };

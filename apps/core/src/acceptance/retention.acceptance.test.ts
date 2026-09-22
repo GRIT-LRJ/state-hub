@@ -79,7 +79,7 @@ describe("Core historical retention maintenance", () => {
           id: "retention-http",
           driverType: "http",
           enabled: true,
-          config: { baseUrl: `http://127.0.0.1:${address.port}/append`, allowPrivateNetwork: true },
+          config: { baseUrl: `http://127.0.0.1:${address.port}/append`, privateTargetOrigin: new URL(`http://127.0.0.1:${address.port}/append`).origin },
         }],
       });
       const event = { eventId: "durable-event-id", type: "retention.event", value: { value: "once" } };

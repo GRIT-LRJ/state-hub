@@ -162,7 +162,7 @@ describe("crash-safe delivery recovery", () => {
           id: "http-delivery",
           driverType: "http",
           enabled: true,
-          config: { baseUrl: probe.url, allowPrivateNetwork: true, timeoutMs: 5_000 },
+          config: { baseUrl: probe.url, privateTargetOrigin: new URL(probe.url).origin, timeoutMs: 5_000 },
         }],
       };
       await harness.admin.publishConfig(config);
@@ -257,7 +257,7 @@ describe("crash-safe delivery recovery", () => {
           id: "http-delivery",
           driverType: "http",
           enabled: true,
-          config: { baseUrl: probe.url, allowPrivateNetwork: true, timeoutMs: 5_000 },
+          config: { baseUrl: probe.url, privateTargetOrigin: new URL(probe.url).origin, timeoutMs: 5_000 },
         }],
       });
 
