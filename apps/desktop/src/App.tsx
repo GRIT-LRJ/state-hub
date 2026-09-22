@@ -7,9 +7,11 @@ import {
 } from "@ant-design/icons";
 import { Alert, Button, Card, ConfigProvider, Empty, Flex, Layout, Modal, Space, Statistic, Table, Tag, Typography, message, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
-import { fetchSnapshot, provisionCodexVirtual, publishConfig, setOutputsPaused, subscribe, type RuntimeSnapshot } from "./api.js";
+import { fetchSnapshot, getConnection, provisionCodexVirtual, publishConfig, setOutputsPaused, subscribe, type RuntimeSnapshot } from "./api.js";
+import { CoreConnectionLoop } from "./connection-loop.js";
 import "./app.css";
 
 const { Header, Content, Footer } = Layout;
@@ -20,35 +22,41 @@ export default function App() {
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
+  const connectionLoop = useRef<CoreConnectionLoop<RuntimeSnapshot> | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      setSnapshot(await fetchSnapshot());
-      setError(undefined);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  }, []);
+  const refresh = useCallback(() => connectionLoop.current?.requestRefresh(), []);
 
   useEffect(() => {
-    void refresh();
-    const controller = new AbortController();
-    void subscribe(() => void refresh(), controller.signal).catch((cause) => {
-      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
-    });
-    const fallback = setInterval(() => void refresh(), 5_000);
-    return () => {
-      controller.abort();
-      clearInterval(fallback);
+    const loop = new CoreConnectionLoop<RuntimeSnapshot>(
+      { connection: getConnection, snapshot: fetchSnapshot, subscribe },
+      { snapshot: setSnapshot, error: setError },
+    );
+    connectionLoop.current = loop;
+    let disposed = false;
+    const listeners: UnlistenFn[] = [];
+    const register = (event: string) => {
+      void listen(event, () => loop.reconnectNow()).then((unlisten) => {
+        if (disposed) unlisten();
+        else listeners.push(unlisten);
+      }).catch(() => undefined);
     };
-  }, [refresh]);
+    register("core-ready");
+    register("core-terminated");
+    loop.start();
+    return () => {
+      disposed = true;
+      listeners.forEach((unlisten) => unlisten());
+      if (connectionLoop.current === loop) connectionLoop.current = null;
+      void loop.stop();
+    };
+  }, []);
 
   const togglePause = async () => {
     if (!snapshot) return;
     setBusy(true);
     try {
       await setOutputsPaused(!snapshot.outputsPaused);
-      await refresh();
+      refresh();
     } finally {
       setBusy(false);
     }
@@ -64,7 +72,7 @@ export default function App() {
         okText: t("publish"),
         onOk: async () => {
           await publishConfig(draft.revision);
-          await refresh();
+          refresh();
           messageApi.success(t("configured"));
         },
       });

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 export interface CoreConnection {
   endpoint: string;
   adminToken: string;
+  generation: number;
 }
 
 export interface StateClaim {
@@ -34,25 +35,20 @@ export interface RuntimeSnapshot {
   deadLetters: number;
 }
 
-let connection: CoreConnection | undefined;
-
-async function getConnection(): Promise<CoreConnection> {
-  connection ??= await invoke<CoreConnection>("core_connection");
-  return connection;
+export async function getConnection(): Promise<CoreConnection> {
+  return await invoke<CoreConnection>("core_connection");
 }
 
-async function coreFetch(path: string, init?: RequestInit): Promise<Response> {
-  const current = await getConnection();
+async function coreFetch(path: string, init?: RequestInit, connection?: CoreConnection): Promise<Response> {
+  const current = connection ?? await getConnection();
   const headers = new Headers(init?.headers);
   headers.set("authorization", `Bearer ${current.adminToken}`);
-  headers.set("content-type", "application/json");
-  const response = await fetch(`${current.endpoint}${path}`, { ...init, headers });
-  if (response.status === 401) connection = undefined;
-  return response;
+  if (init?.body) headers.set("content-type", "application/json");
+  return await fetch(`${current.endpoint}${path}`, { ...init, headers });
 }
 
-export async function fetchSnapshot(): Promise<RuntimeSnapshot> {
-  const response = await coreFetch("/api/v1/admin/snapshot");
+export async function fetchSnapshot(connection?: CoreConnection, signal?: AbortSignal): Promise<RuntimeSnapshot> {
+  const response = await coreFetch("/api/v1/admin/snapshot", signal ? { signal } : {}, connection);
   if (!response.ok) throw new Error(`Core returned HTTP ${response.status}`);
   return (await response.json()) as RuntimeSnapshot;
 }
@@ -106,21 +102,31 @@ export async function publishConfig(revision: number): Promise<void> {
   if (!response.ok) throw new Error(`Configuration publish returned HTTP ${response.status}`);
 }
 
-export async function subscribe(onChange: () => void, signal: AbortSignal): Promise<void> {
-  const response = await coreFetch("/api/v1/admin/events", { signal });
+export async function subscribe(connection: CoreConnection, onChange: () => void,
+  signal: AbortSignal): Promise<void> {
+  const response = await coreFetch("/api/v1/admin/events", { signal }, connection);
   if (!response.ok || !response.body) throw new Error(`SSE returned HTTP ${response.status}`);
-  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
   let buffer = "";
-  while (!signal.aborted) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += value;
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary >= 0) {
-      const frame = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      if (frame.includes("event: snapshot.changed") || frame.includes("event: outputs.pause-changed")) onChange();
-      boundary = buffer.indexOf("\n\n");
+  try {
+    while (!signal.aborted) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      buffer = (buffer + decoder.decode(value, { stream: true })).replaceAll("\r\n", "\n");
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const type = frame.split("\n").find((line) => line.startsWith("event:"))?.slice(6).trim();
+        // The initial Core snapshot frame closes the fetch-to-subscribe race; its body is not UI state.
+        if (type) onChange();
+        boundary = buffer.indexOf("\n\n");
+      }
+      if (buffer.length > 65_536) throw new Error("SSE_FRAME_TOO_LARGE");
     }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
 }

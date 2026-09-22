@@ -31,6 +31,7 @@ interface CoreAcceptanceHarnessOptions {
   deliveryLeaseMs?: number;
   pluginDevelopmentMode?: boolean;
   upgradeCrashAfterCommit?: boolean;
+  supervisedStdin?: boolean;
   retentionMaxAgeMs?: number;
   retentionMaxBytes?: number;
   retentionIntervalMs?: number;
@@ -389,6 +390,18 @@ export class CoreAcceptanceHarness {
     this.#discovery = undefined;
   }
 
+  async disconnectSupervisorStdin(): Promise<void> {
+    const child = this.#child;
+    if (!this.options.supervisedStdin || !child?.stdin || !this.isRunning) {
+      throw new Error("Core was not started with a supervisor stdin pipe");
+    }
+    await this.closeObservers();
+    child.stdin.end();
+    await this.waitForExit(child, 5_000, "Core exit after supervisor pipe closure");
+    this.#child = undefined;
+    this.#discovery = undefined;
+  }
+
   async crash(): Promise<void> {
     const child = this.#child;
     if (!child || !this.isRunning) return;
@@ -481,10 +494,11 @@ export class CoreAcceptanceHarness {
     delete childEnvironment.STATE_HUB_RETENTION_INTERVAL_MS;
     delete childEnvironment.STATE_HUB_PLUGIN_DEVELOPMENT_MODE;
     delete childEnvironment.STATE_HUB_TEST_UPGRADE_CRASH_AFTER_COMMIT;
+    delete childEnvironment.STATE_HUB_SUPERVISED;
     const child = spawn(process.execPath, ["--import", "tsx", entrypoint], {
       cwd: coreRoot,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
+      stdio: [this.options.supervisedStdin ? "pipe" : "ignore", "pipe", "pipe", "ipc"],
       env: {
         ...childEnvironment,
         STATE_HUB_ADMIN_TOKEN: this.adminToken,
@@ -494,6 +508,7 @@ export class CoreAcceptanceHarness {
         STATE_HUB_PORT: "0",
         ...(this.options.pluginDevelopmentMode ? { STATE_HUB_PLUGIN_DEVELOPMENT_MODE: "true" } : {}),
         ...(this.options.upgradeCrashAfterCommit ? { STATE_HUB_TEST_UPGRADE_CRASH_AFTER_COMMIT: "1" } : {}),
+        ...(this.options.supervisedStdin ? { STATE_HUB_SUPERVISED: "1" } : {}),
         ...(this.options.deliveryLeaseMs
           ? { STATE_HUB_DELIVERY_LEASE_MS: String(this.options.deliveryLeaseMs) }
           : {}),
