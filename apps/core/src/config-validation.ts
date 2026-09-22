@@ -176,12 +176,12 @@ function validateBinding(binding: Binding, definition: DriverDefinition): void {
   }
 }
 
-export function validatePublishedConfig(config: unknown, plugins: PluginRepository): void {
+export function validatePublishedConfig(config: unknown, plugins: PluginRepository,
+  catalog = plugins.catalog()): void {
   if (!configShape(config)) throw new ConfigValidationError("INVALID_CONFIG_SHAPE");
   const candidate = config as { driverInstances: Array<{
     id: string; driverType: string; enabled: boolean; config: Record<string, unknown>; physicalResourceKey?: string;
   }>; bindings: Binding[] };
-  const catalog = plugins.catalog();
   const definitions = new Map(catalog.driverDefinitions.map((definition) => [definition.id, definition]));
   const sources = new Map(catalog.sourceDefinitions.map((definition) => [definition.id, definition]));
   const instanceIds = new Set<string>();

@@ -20,6 +20,24 @@ describe("plugin framing", () => {
       .toThrow(/frame length/u);
   });
 
+  it("runs a plugin-owned config migration or preserves compatible config by identity", async () => {
+    const request = { fromVersion: "1.0.0", toVersion: "2.0.0",
+      driverInstances: [{ id: "one", driverType: "community.demo.driver", config: { color: "red" } }] };
+    const identity = await new PluginRpcServer({}).handle({
+      jsonrpc: "2.0", id: 1, method: "statehub.migrate", params: request,
+    });
+    expect(identity.result).toEqual({ driverInstances: [{ id: "one", config: { color: "red" } }] });
+    const custom = await new PluginRpcServer({
+      migrateDriverConfigs: ({ driverInstances }) => ({
+        driverInstances: driverInstances.map(({ id, config }) =>
+          ({ id, config: { ...config, brightness: 10 } })),
+      }),
+    }).handle({ jsonrpc: "2.0", id: 2, method: "statehub.migrate", params: request });
+    expect(custom.result).toEqual({
+      driverInstances: [{ id: "one", config: { color: "red", brightness: 10 } }],
+    });
+  });
+
   it("negotiates protocol versions", async () => {
     const server = new PluginRpcServer({});
     const response = await server.handle({

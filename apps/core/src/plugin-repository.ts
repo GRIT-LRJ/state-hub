@@ -25,6 +25,23 @@ export class PluginInstallError extends Error {
   }
 }
 
+export interface PluginUpgradeCandidate {
+  id: string;
+  fromVersion: string;
+  fromArchiveSha256: string;
+  version: string;
+  publisher: string;
+  signed: boolean;
+  enabled: boolean;
+  archiveSha256: string;
+  archive: Buffer;
+  verified: VerifiedPlugin;
+  sourceDefinitions: SourceDefinition[];
+  driverDefinitions: DriverDefinition[];
+  oldSourceDefinitionIds: string[];
+  oldDriverDefinitionIds: string[];
+}
+
 export interface PluginDependencies {
   driverInstances: string[];
   bindings: string[];
@@ -193,6 +210,115 @@ export class PluginRepository {
     }
     return { id: manifest.id, version: manifest.version, publisher: manifest.publisher,
       signed: verified.signed, archiveSha256 };
+  }
+
+  inspectUpgrade(id: string, archive: Uint8Array): PluginUpgradeCandidate {
+    const current = this.db.raw.prepare(
+      `SELECT version, publisher_id, signed, enabled, archive_sha256,
+              source_definitions_json, driver_definitions_json
+       FROM plugin_packages WHERE id = ? AND active = 1`,
+    ).get(id) as PackageRow | undefined;
+    if (!current) throw new PluginInstallError("PLUGIN_NOT_FOUND", "Plugin package was not found", 404);
+    const trustRows = this.db.raw.prepare("SELECT id, public_key_pem FROM plugin_publishers")
+      .all() as Array<{ id: string; public_key_pem: string }>;
+    let verified: VerifiedPlugin;
+    try {
+      verified = verifyPlugin(archive, new Map(trustRows.map((row) => [row.id, row.public_key_pem])), {
+        developmentMode: this.developmentMode,
+      });
+    } catch {
+      throw new PluginInstallError("INVALID_PLUGIN_PACKAGE", "Upgrade package failed verification");
+    }
+    const { manifest, files } = verified;
+    if (manifest.id !== id || manifest.publisher !== current.publisher_id ||
+      (current.signed === 1 && !verified.signed)) {
+      throw new PluginInstallError("PLUGIN_UPGRADE_IDENTITY", "Upgrade identity or publisher does not match", 409);
+    }
+    if (manifest.version === current.version || this.db.raw.prepare(
+      "SELECT 1 FROM plugin_packages WHERE id = ? AND version = ?",
+    ).get(id, manifest.version)) {
+      throw new PluginInstallError("PLUGIN_VERSION_CONFLICT", "Plugin version is already installed", 409);
+    }
+    if (!manifest.entrypoints[process.platform]) {
+      throw new PluginInstallError("MISSING_PLATFORM_ENTRYPOINT", "Plugin has no entrypoint for this platform");
+    }
+    let sourceDefinitions: SourceDefinition[];
+    let driverDefinitions: DriverDefinition[];
+    try {
+      sourceDefinitions = (manifest.sourceDefinitions ?? []).map((path) =>
+        parseDefinition(files.get(path) as Uint8Array, "source") as SourceDefinition);
+      driverDefinitions = (manifest.driverDefinitions ?? []).map((path) =>
+        parseDefinition(files.get(path) as Uint8Array, "driver") as DriverDefinition);
+      validateSchemas(sourceDefinitions, driverDefinitions);
+    } catch (error) {
+      if (error instanceof PluginInstallError) throw error;
+      throw new PluginInstallError("INVALID_PLUGIN_DEFINITION", "Upgrade definition is invalid");
+    }
+    const otherRows = this.db.raw.prepare(
+      `SELECT source_definitions_json, driver_definitions_json FROM plugin_packages
+       WHERE active = 1 AND id <> ?`,
+    ).all(id) as PackageRow[];
+    const sourceIds = new Set([...builtinCatalog.sourceDefinitions.map((entry) => entry.id),
+      ...otherRows.flatMap((row) => (JSON.parse(row.source_definitions_json) as SourceDefinition[])
+        .map((entry) => entry.id))]);
+    const driverIds = new Set([...builtinCatalog.driverDefinitions.map((entry) => entry.id),
+      ...otherRows.flatMap((row) => (JSON.parse(row.driver_definitions_json) as DriverDefinition[])
+        .map((entry) => entry.id))]);
+    for (const definition of sourceDefinitions) {
+      if (sourceIds.has(definition.id)) {
+        throw new PluginInstallError("DUPLICATE_PLUGIN_DEFINITION", "Source definition ID already exists", 409);
+      }
+      sourceIds.add(definition.id);
+    }
+    for (const definition of driverDefinitions) {
+      if (driverIds.has(definition.id)) {
+        throw new PluginInstallError("DUPLICATE_PLUGIN_DEFINITION", "Driver definition ID already exists", 409);
+      }
+      driverIds.add(definition.id);
+    }
+    const oldSourceDefinitionIds = (JSON.parse(current.source_definitions_json) as SourceDefinition[])
+      .map((entry) => entry.id);
+    const oldDriverDefinitionIds = (JSON.parse(current.driver_definitions_json) as DriverDefinition[])
+      .map((entry) => entry.id);
+    return {
+      id, fromVersion: current.version, fromArchiveSha256: current.archive_sha256,
+      version: manifest.version, publisher: manifest.publisher, signed: verified.signed,
+      enabled: current.enabled === 1, archiveSha256: createHash("sha256").update(archive).digest("hex"),
+      archive: Buffer.from(archive), verified, sourceDefinitions, driverDefinitions,
+      oldSourceDefinitionIds, oldDriverDefinitionIds,
+    };
+  }
+
+  catalogForUpgrade(candidate: PluginUpgradeCandidate): Catalog {
+    const current = this.catalog();
+    const oldSources = new Set(candidate.oldSourceDefinitionIds);
+    const oldDrivers = new Set(candidate.oldDriverDefinitionIds);
+    return {
+      sourceDefinitions: [...current.sourceDefinitions.filter((entry) => !oldSources.has(entry.id)),
+        ...candidate.sourceDefinitions],
+      driverDefinitions: [...current.driverDefinitions.filter((entry) => !oldDrivers.has(entry.id)),
+        ...candidate.driverDefinitions],
+    };
+  }
+
+  activateUpgrade(candidate: PluginUpgradeCandidate): void {
+    const current = this.db.raw.prepare(
+      "SELECT version, archive_sha256 FROM plugin_packages WHERE id = ? AND active = 1",
+    ).get(candidate.id) as { version: string; archive_sha256: string } | undefined;
+    if (!current || current.version !== candidate.fromVersion ||
+      current.archive_sha256 !== candidate.fromArchiveSha256) {
+      throw new PluginInstallError("PLUGIN_UPGRADE_STALE_BASE", "Active plugin changed during upgrade", 409);
+    }
+    this.db.raw.prepare("UPDATE plugin_packages SET active = 0 WHERE id = ? AND active = 1").run(candidate.id);
+    this.db.raw.prepare(
+      `INSERT INTO plugin_packages(id, version, publisher_id, signed, manifest_json,
+         source_definitions_json, driver_definitions_json, archive_sha256, archive_blob,
+         installed_at, active, enabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+    ).run(candidate.id, candidate.version, candidate.publisher, candidate.signed ? 1 : 0,
+      JSON.stringify(candidate.verified.manifest), JSON.stringify(candidate.sourceDefinitions),
+      JSON.stringify(candidate.driverDefinitions), candidate.archiveSha256, candidate.archive,
+      new Date().toISOString(), candidate.enabled ? 1 : 0);
   }
 
   installed(): Array<{ id: string; version: string; publisher: string; signed: boolean; enabled: boolean; archiveSha256: string; installedAt: string }> {

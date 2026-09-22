@@ -200,6 +200,16 @@ export interface DriverDefinition {
   actions: Record<string, { kind: ActionKind; paramsSchema: Record<string, unknown> }>;
 }
 
+export interface PluginConfigMigrationRequest {
+  fromVersion: string;
+  toVersion: string;
+  driverInstances: Array<{ id: string; driverType: string; config: Record<string, unknown> }>;
+}
+
+export interface PluginConfigMigrationResult {
+  driverInstances: Array<{ id: string; config: Record<string, unknown> }>;
+}
+
 export interface PluginManifest {
   id: string;
   version: string;

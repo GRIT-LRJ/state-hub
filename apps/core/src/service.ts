@@ -140,6 +140,7 @@ function diagnosticNonNegativeInteger(value: unknown): number | null {
 const diagnosticHistoryKinds = [
   "claim.upsert", "claim.clear", "event.emit", "snapshot.replace", "outputs.paused",
   "outputs.resumed", "config.published", "delivery.suppressed",
+  "plugin.upgrade.succeeded", "plugin.upgrade.failed",
 ] as const;
 
 function safeHistoryPayload(value: unknown): Record<string, number> {
@@ -643,7 +644,7 @@ export class StateHubService {
     });
   }
 
-  publishConfig(revision: number): void {
+  publishConfig(revision: number, notify = true): void {
     const now = new Date().toISOString();
     this.db.transaction(() => {
       const draft = this.db.raw
@@ -752,6 +753,10 @@ export class StateHubService {
       }
       this.appendHistory("config.published", String(revision), {}, now);
     });
+    if (notify) this.announceConfigPublished(revision);
+  }
+
+  announceConfigPublished(revision: number): void {
     this.events.publish("config.published", { revision });
     this.events.publish("snapshot.changed", this.snapshot());
   }

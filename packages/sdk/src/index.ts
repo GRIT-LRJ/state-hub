@@ -2,6 +2,8 @@ import type {
   DriverActionRequest,
   DriverActionResult,
   DriverDefinition,
+  PluginConfigMigrationRequest,
+  PluginConfigMigrationResult,
   JsonRpcRequest,
   JsonRpcResponse,
   SourceDefinition,
@@ -52,6 +54,7 @@ export interface StateHubPlugin {
   start?(): void | Promise<void>;
   stop?(): void | Promise<void>;
   executeDriverAction?(request: DriverActionRequest): DriverActionResult | Promise<DriverActionResult>;
+  migrateDriverConfigs?(request: PluginConfigMigrationRequest): PluginConfigMigrationResult | Promise<PluginConfigMigrationResult>;
 }
 
 export function defineSource(definition: SourceDefinition): SourceDefinition {
@@ -79,6 +82,14 @@ export class PluginRpcServer {
         sourceDefinitions: plugin.sourceDefinitions ?? [],
         driverDefinitions: plugin.driverDefinitions ?? [],
       };
+    });
+    this.#methods.set("statehub.migrate", async (params) => {
+      const request = params as PluginConfigMigrationRequest;
+      if (!request || typeof request.fromVersion !== "string" || typeof request.toVersion !== "string" ||
+        !Array.isArray(request.driverInstances)) throw new Error("Invalid migration request");
+      return plugin.migrateDriverConfigs
+        ? await plugin.migrateDriverConfigs(request)
+        : { driverInstances: request.driverInstances.map(({ id, config }) => ({ id, config })) };
     });
     this.#methods.set("statehub.health", () => ({ status: "ok" }));
     this.#methods.set("statehub.stop", async () => {

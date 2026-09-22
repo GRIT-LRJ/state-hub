@@ -1,9 +1,11 @@
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { stableStringify } from "@state-hub/domain";
-import { PLUGIN_PROTOCOL_VERSION, type DriverActionRequest, type DriverActionResult } from "@state-hub/protocol";
-import { PluginSupervisor } from "./plugin-host.js";
-import type { PluginRepository } from "./plugin-repository.js";
+import { PLUGIN_PROTOCOL_VERSION, type DriverActionRequest, type DriverActionResult,
+  type PluginConfigMigrationRequest } from "@state-hub/protocol";
+import type { VerifiedPlugin } from "@state-hub/plugin-kit";
+import { PluginProcess, PluginSupervisor } from "./plugin-host.js";
+import type { PluginRepository, PluginUpgradeCandidate } from "./plugin-repository.js";
 
 type RuntimeState = "running" | "failed" | "stopped";
 export interface PluginRuntimeStatus {
@@ -13,11 +15,20 @@ export interface PluginRuntimeStatus {
   pid?: number;
 }
 
+export interface StagedPluginUpgrade {
+  id: string;
+  directory: string;
+  process: PluginProcess;
+  migrationResult: unknown;
+  markPromoted(): void;
+}
+
 export class PluginRuntime {
   readonly #supervisor = new PluginSupervisor();
   readonly #statuses = new Map<string, PluginRuntimeStatus>();
   readonly #directories = new Map<string, string>();
   readonly #starting = new Map<string, Promise<PluginRuntimeStatus>>();
+  readonly #ownerEpoch = new Map<string, number>();
   readonly #runtimeRoot: string;
 
   constructor(private readonly repository: PluginRepository, dataDir: string) {
@@ -49,37 +60,22 @@ export class PluginRuntime {
       const plugin = this.repository.runtimePackage(id);
       const entrypoint = plugin.manifest.entrypoints[process.platform];
       if (!entrypoint) throw new Error("MISSING_PLATFORM_ENTRYPOINT");
-      directory = mkdtempSync(join(this.#runtimeRoot, "run-"));
-      writeFileSync(join(directory, ".statehub-runtime"), "statehub-plugin-runtime-v1", { mode: 0o600 });
-      for (const [path, contents] of plugin.files) {
-        const target = resolve(directory, path);
-        if (!target.startsWith(`${directory}${sep}`)) throw new Error("UNSAFE_PLUGIN_PATH");
-        mkdirSync(dirname(target), { recursive: true });
-        writeFileSync(target, contents, { mode: 0o600 });
-      }
-      const target = resolve(directory, entrypoint);
-      if (!target.startsWith(`${directory}${sep}`)) throw new Error("UNSAFE_PLUGIN_ENTRYPOINT");
-      if (!/[.]([cm]?js)$/iu.test(extname(target))) chmodSync(target, 0o700);
-      const isJavaScript = /\.[cm]?js$/iu.test(target);
+      const materialized = this.materialize(plugin);
+      directory = materialized.directory;
+      const epoch = (this.#ownerEpoch.get(id) ?? 0) + 1;
+      this.#ownerEpoch.set(id, epoch);
       const { process: child, handshake } = await this.#supervisor.start(
-        id, isJavaScript ? process.execPath : target, isJavaScript ? [target] : [], directory,
-        (reasonCode) => this.#statuses.set(id, { id, status: "failed", reasonCode }),
+        id, materialized.command, materialized.args, directory,
+        (reasonCode) => {
+          if (this.#ownerEpoch.get(id) === epoch) {
+            this.#statuses.set(id, { id, status: "failed", reasonCode });
+          }
+        },
       );
-      const expectedSources = (plugin.manifest.sourceDefinitions ?? []).map((path) =>
-        JSON.parse(Buffer.from(plugin.files.get(path) as Uint8Array).toString("utf8")) as unknown);
-      const expectedDrivers = (plugin.manifest.driverDefinitions ?? []).map((path) =>
-        JSON.parse(Buffer.from(plugin.files.get(path) as Uint8Array).toString("utf8")) as unknown);
-      const hello = handshake as { protocolVersion?: unknown; sourceDefinitions?: unknown; driverDefinitions?: unknown } | null;
-      if (!hello || hello.protocolVersion !== PLUGIN_PROTOCOL_VERSION ||
-        stableStringify(hello.sourceDefinitions) !== stableStringify(expectedSources) ||
-        stableStringify(hello.driverDefinitions) !== stableStringify(expectedDrivers)) {
+      try { await this.verifyHandshakeAndHealth(plugin, child, handshake); }
+      catch (error) {
         await this.#supervisor.stop(id);
-        throw new Error("INCOMPATIBLE_HANDSHAKE");
-      }
-      const health = await child.health() as { status?: unknown } | null;
-      if (!health || health.status !== "ok") {
-        await this.#supervisor.stop(id);
-        throw new Error("PLUGIN_HEALTH_FAILED");
+        throw error;
       }
       this.#directories.set(id, directory);
       const status: PluginRuntimeStatus = { id, status: "running", ...(child.pid ? { pid: child.pid } : {}) };
@@ -93,6 +89,96 @@ export class PluginRuntime {
       this.#statuses.set(id, status);
       return status;
     }
+  }
+
+  async preflightUpgrade(candidate: PluginUpgradeCandidate,
+    request: PluginConfigMigrationRequest): Promise<StagedPluginUpgrade> {
+    let directory: string | undefined;
+    let child: PluginProcess | undefined;
+    let promotedEpoch: number | undefined;
+    try {
+      const materialized = this.materialize(candidate.verified);
+      directory = materialized.directory;
+      child = new PluginProcess(materialized.command, materialized.args, directory,
+        (reasonCode) => {
+          if (promotedEpoch !== undefined &&
+            this.#ownerEpoch.get(candidate.id) === promotedEpoch) {
+            this.#statuses.set(candidate.id,
+              { id: candidate.id, status: "failed", reasonCode });
+          }
+        });
+      const handshake = await child.initialize();
+      await this.verifyHandshakeAndHealth(candidate.verified, child, handshake);
+      let migrationResult: unknown;
+      try { migrationResult = await child.call("statehub.migrate", request, 10_000); }
+      catch { throw new Error("PLUGIN_MIGRATION_FAILED"); }
+      if (child.closed) throw new Error("PLUGIN_UNAVAILABLE");
+      return { id: candidate.id, directory, process: child, migrationResult,
+        markPromoted: () => { promotedEpoch = this.#ownerEpoch.get(candidate.id); } };
+    } catch (error) {
+      await child?.close().catch(() => undefined);
+      if (directory) this.removeExactDirectory(directory);
+      const code = error instanceof Error && /^[A-Z_]+$/u.test(error.message)
+        ? error.message : "PLUGIN_UPGRADE_PREFLIGHT_FAILED";
+      throw new Error(code);
+    }
+  }
+
+  async activateUpgrade(stage: StagedPluginUpgrade): Promise<void> {
+    const old = this.#supervisor.replace(stage.id, stage.process);
+    this.#ownerEpoch.set(stage.id, (this.#ownerEpoch.get(stage.id) ?? 0) + 1);
+    stage.markPromoted();
+    const oldDirectory = this.#directories.get(stage.id);
+    this.#directories.set(stage.id, stage.directory);
+    this.#statuses.set(stage.id, { id: stage.id, status: "running",
+      ...(stage.process.pid ? { pid: stage.process.pid } : {}) });
+    await old?.close().catch(() => undefined);
+    if (oldDirectory) this.removeExactDirectory(oldDirectory);
+  }
+
+  async discardUpgrade(stage: StagedPluginUpgrade): Promise<void> {
+    await stage.process.close().catch(() => undefined);
+    this.removeExactDirectory(stage.directory);
+  }
+
+  private materialize(plugin: VerifiedPlugin): { directory: string; command: string; args: string[] } {
+    const directory = mkdtempSync(join(this.#runtimeRoot, "run-"));
+    try {
+      writeFileSync(join(directory, ".statehub-runtime"), "statehub-plugin-runtime-v1", { mode: 0o600 });
+      for (const [path, contents] of plugin.files) {
+        const target = resolve(directory, path);
+        if (!target.startsWith(`${directory}${sep}`)) throw new Error("UNSAFE_PLUGIN_PATH");
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, contents, { mode: 0o600 });
+      }
+      const entrypoint = plugin.manifest.entrypoints[process.platform];
+      if (!entrypoint) throw new Error("MISSING_PLATFORM_ENTRYPOINT");
+      const target = resolve(directory, entrypoint);
+      if (!target.startsWith(`${directory}${sep}`)) throw new Error("UNSAFE_PLUGIN_ENTRYPOINT");
+      if (!/[.]([cm]?js)$/iu.test(extname(target))) chmodSync(target, 0o700);
+      const isJavaScript = /\.[cm]?js$/iu.test(target);
+      return { directory, command: isJavaScript ? process.execPath : target,
+        args: isJavaScript ? [target] : [] };
+    } catch (error) {
+      this.removeExactDirectory(directory);
+      throw error;
+    }
+  }
+
+  private async verifyHandshakeAndHealth(plugin: VerifiedPlugin,
+    child: PluginProcess, handshake: unknown): Promise<void> {
+    const expectedSources = (plugin.manifest.sourceDefinitions ?? []).map((path) =>
+      JSON.parse(Buffer.from(plugin.files.get(path) as Uint8Array).toString("utf8")) as unknown);
+    const expectedDrivers = (plugin.manifest.driverDefinitions ?? []).map((path) =>
+      JSON.parse(Buffer.from(plugin.files.get(path) as Uint8Array).toString("utf8")) as unknown);
+    const hello = handshake as { protocolVersion?: unknown; sourceDefinitions?: unknown; driverDefinitions?: unknown } | null;
+    if (!hello || hello.protocolVersion !== PLUGIN_PROTOCOL_VERSION ||
+      stableStringify(hello.sourceDefinitions) !== stableStringify(expectedSources) ||
+      stableStringify(hello.driverDefinitions) !== stableStringify(expectedDrivers)) {
+      throw new Error("INCOMPATIBLE_HANDSHAKE");
+    }
+    const health = await child.health() as { status?: unknown } | null;
+    if (!health || health.status !== "ok") throw new Error("PLUGIN_HEALTH_FAILED");
   }
 
   hasDriver(driverType: string): boolean {

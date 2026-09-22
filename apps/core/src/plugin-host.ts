@@ -167,6 +167,13 @@ export class PluginSupervisor {
     }
   }
 
+  replace(packageId: string, next: PluginProcess): PluginProcess | undefined {
+    if (next.closed) throw new Error("PLUGIN_UNAVAILABLE");
+    const previous = this.#processes.get(packageId);
+    this.#processes.set(packageId, next);
+    return previous;
+  }
+
   get(packageId: string): PluginProcess | undefined {
     const process = this.#processes.get(packageId);
     return process?.closed ? undefined : process;

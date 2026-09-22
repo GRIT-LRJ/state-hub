@@ -46,7 +46,12 @@ const drivers = new DriverRegistry(db, events, new OsSecretProvider(), pluginRun
 const dispatcher = new DeliveryDispatcher(db, drivers, events, config.deliveryLeaseMs);
 dispatcher.recoverInterrupted();
 const ttlScheduler = new ClaimTtlScheduler(service, events);
-const app = createServer({ service, events, drivers, dispatcher, plugins, pluginRuntime, adminToken: config.adminToken });
+const app = createServer({ service, events, drivers, dispatcher, plugins, pluginRuntime,
+  adminToken: config.adminToken,
+  ...(process.env.NODE_ENV === "test" &&
+    process.env.STATE_HUB_TEST_UPGRADE_CRASH_AFTER_COMMIT === "1"
+    ? { onUpgradeCommitted: () => process.exit(73) } : {}),
+});
 const address = await app.listen({ host: config.host, port: config.port });
 const port = Number.parseInt(new URL(address).port, 10);
 const discovery = {

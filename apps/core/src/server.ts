@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import { stableStringify } from "@state-hub/domain";
 import type { Binding, OccurrenceEventInput, StateClaimInput } from "@state-hub/protocol";
 import { claimInputSchema, occurrenceInputSchema } from "@state-hub/protocol";
 import { authenticateProducer, generateToken, registerProducer, safeTokenEqual } from "./auth.js";
@@ -8,6 +9,7 @@ import type { HubEventBus } from "./events.js";
 import { HubError, type PublishedConfig, type SnapshotClaim, type StateHubService } from "./service.js";
 import { PluginDependencyError, PluginInstallError, PluginRepository } from "./plugin-repository.js";
 import type { PluginRuntime } from "./plugin-runtime.js";
+import { migratedUpgradeConfig } from "./plugin-upgrade.js";
 
 interface ServerOptions {
   service: StateHubService;
@@ -17,6 +19,7 @@ interface ServerOptions {
   adminToken: string;
   plugins?: PluginRepository;
   pluginRuntime?: PluginRuntime;
+  onUpgradeCommitted?: () => void;
 }
 
 function bearerToken(request: FastifyRequest): string | undefined {
@@ -334,6 +337,119 @@ export function createServer(options: ServerOptions): FastifyInstance {
       const runtime = options.pluginRuntime ? await options.pluginRuntime.start(installed.id) : undefined;
       return await reply.code(201).send({ ...installed, ...(runtime ? { runtime } : {}) });
     }));
+
+  app.get("/api/v1/admin/plugins/:id/upgrade-status", { preHandler: adminAuth }, async (request) => {
+    const { id } = request.params as { id: string };
+    const row = options.service.db.raw.prepare(
+      `SELECT kind, payload_json, created_at FROM history
+       WHERE subject_id = ? AND kind IN ('plugin.upgrade.succeeded', 'plugin.upgrade.failed')
+       ORDER BY id DESC LIMIT 1`,
+    ).get(id) as { kind: string; payload_json: string; created_at: string } | undefined;
+    if (!row) return { id, status: "never-attempted" };
+    const payload = JSON.parse(row.payload_json) as { code?: unknown; revision?: unknown };
+    const code = typeof payload.code === "string" && /^[A-Z_]{1,64}$/u.test(payload.code)
+      ? payload.code : "PLUGIN_UPGRADE_FAILED";
+    return { id, status: row.kind === "plugin.upgrade.succeeded" ? "active" : "failed",
+      ...(row.kind === "plugin.upgrade.failed" ? { reasonCode: code } : {}),
+      ...(row.kind === "plugin.upgrade.succeeded" && Number.isSafeInteger(payload.revision)
+        ? { revision: payload.revision } : {}),
+      at: row.created_at };
+  });
+
+  app.post("/api/v1/admin/plugins/:id/upgrade",
+    { onRequest: adminAuth, bodyLimit: 128 * 1024 * 1024 },
+    async (request, reply) => await mutatePlugin(async () => await mutateConfig(async () => {
+      if (request.headers["content-type"] !== "application/vnd.statehub.plugin" ||
+        !Buffer.isBuffer(request.body)) {
+        throw new PluginInstallError("INVALID_PLUGIN_UPLOAD", "A binary plugin package is required");
+      }
+      if (!options.pluginRuntime) {
+        throw new PluginInstallError("PLUGIN_RUNTIME_UNAVAILABLE", "Plugin runtime is unavailable", 503);
+      }
+      const { id } = request.params as { id: string };
+      let candidate: ReturnType<PluginRepository["inspectUpgrade"]>;
+      try {
+        candidate = plugins.inspectUpgrade(id, request.body);
+        if (!candidate.enabled) {
+          throw new PluginInstallError("PLUGIN_DISABLED", "Enable the plugin before upgrading", 409);
+        }
+      } catch (error) {
+        const code = error instanceof PluginInstallError ? error.code : "PLUGIN_UPGRADE_FAILED";
+        options.service.db.raw.prepare(
+          "INSERT INTO history(kind, subject_id, payload_json, created_at) VALUES (?, ?, ?, ?)",
+        ).run("plugin.upgrade.failed", id, JSON.stringify({ code }), new Date().toISOString());
+        throw error;
+      }
+      const current = options.service.exportConfig();
+      const oldTypes = new Set(candidate.oldDriverDefinitionIds);
+      const requestConfig = {
+        fromVersion: candidate.fromVersion, toVersion: candidate.version,
+        driverInstances: current.driverInstances.filter((instance) => oldTypes.has(instance.driverType))
+          .map((instance) => ({
+            id: instance.id, driverType: instance.driverType, config: instance.config,
+          })),
+      };
+      let stage: Awaited<ReturnType<PluginRuntime["preflightUpgrade"]>> | undefined;
+      let committed = false;
+      let paused = false;
+      try {
+        stage = await options.pluginRuntime.preflightUpgrade(candidate, requestConfig);
+        let next = migratedUpgradeConfig(options.service.db, plugins, candidate,
+          current, stage.migrationResult);
+        options.dispatcher.stop();
+        paused = true;
+        await options.dispatcher.waitForIdle();
+        // Producer commands may have added claims or deliveries during the side-by-side preflight.
+        if (stableStringify(options.service.exportConfig()) !== stableStringify(current)) {
+          throw new PluginInstallError("PLUGIN_UPGRADE_STALE_BASE", "Configuration changed during upgrade", 409);
+        }
+        const health = await stage.process.health() as { status?: unknown } | null;
+        if (health?.status !== "ok" || stage.process.closed) {
+          throw new PluginInstallError("PLUGIN_HEALTH_FAILED", "Candidate plugin is unhealthy", 409);
+        }
+        let revision = 0;
+        options.service.db.transaction(() => {
+          next = migratedUpgradeConfig(options.service.db, plugins, candidate,
+            current, stage!.migrationResult);
+          plugins.activateUpgrade(candidate);
+          revision = options.service.createConfigDraft(next).revision;
+          options.service.publishConfig(revision, false);
+          options.service.db.raw.prepare(
+            "INSERT INTO history(kind, subject_id, payload_json, created_at) VALUES (?, ?, ?, ?)",
+          ).run("plugin.upgrade.succeeded", id,
+            JSON.stringify({ fromVersion: candidate.fromVersion, toVersion: candidate.version,
+              revision }), new Date().toISOString());
+        });
+        committed = true;
+        options.onUpgradeCommitted?.();
+        // This call replaces the process synchronously before it awaits old-process cleanup.
+        await options.pluginRuntime.activateUpgrade(stage);
+        options.drivers.invalidate();
+        for (const instance of next.driverInstances) {
+          if (oldTypes.has(instance.driverType) && instance.enabled) {
+            options.dispatcher.recoverCurrentStateful(instance.id);
+          }
+        }
+        options.service.announceConfigPublished(revision);
+        return await reply.send({ id, fromVersion: candidate.fromVersion,
+          version: candidate.version, revision, status: "active" });
+      } catch (error) {
+        if (!committed && stage) await options.pluginRuntime.discardUpgrade(stage);
+        if (!committed) {
+          const code = error instanceof PluginInstallError ? error.code :
+            error instanceof Error && /^[A-Z_]+$/u.test(error.message) ?
+              error.message : "PLUGIN_UPGRADE_FAILED";
+          options.service.db.raw.prepare(
+            "INSERT INTO history(kind, subject_id, payload_json, created_at) VALUES (?, ?, ?, ?)",
+          ).run("plugin.upgrade.failed", id, JSON.stringify({ code }), new Date().toISOString());
+          if (error instanceof PluginInstallError) throw error;
+          throw new PluginInstallError(code, "Plugin upgrade preflight failed", 409);
+        }
+        throw error;
+      } finally {
+        if (paused) options.dispatcher.start();
+      }
+    })));
 
   app.post("/api/v1/admin/producers", { preHandler: adminAuth }, async (request, reply) => {
     const body = request.body as { producerId?: string; sourceDefinitionId?: string };
