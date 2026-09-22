@@ -212,6 +212,7 @@ CREATE TABLE IF NOT EXISTS plugin_packages (
   archive_blob BLOB NOT NULL,
   installed_at TEXT NOT NULL,
   active INTEGER NOT NULL DEFAULT 1,
+  enabled INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (id, version)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS plugin_packages_one_active ON plugin_packages(id) WHERE active = 1;
@@ -246,6 +247,10 @@ export class StateHubDatabase {
     const producerColumns = this.raw.pragma("table_info(producer_tokens)") as Array<{ name: string }>;
     if (!producerColumns.some((column) => column.name === "source_definition_id")) {
       this.raw.exec("ALTER TABLE producer_tokens ADD COLUMN source_definition_id TEXT");
+    }
+    const pluginColumns = this.raw.pragma("table_info(plugin_packages)") as Array<{ name: string }>;
+    if (!pluginColumns.some((column) => column.name === "enabled")) {
+      this.raw.exec("ALTER TABLE plugin_packages ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1");
     }
     const deliveryColumns = this.raw.pragma("table_info(deliveries)") as Array<{ name: string }>;
     if (!deliveryColumns.some((column) => column.name === "producer_id")) {

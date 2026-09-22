@@ -8,6 +8,8 @@ import { DriverRegistry } from "./drivers.js";
 import { HubEventBus } from "./events.js";
 import { RetentionService } from "./retention.js";
 import { PluginRepository } from "./plugin-repository.js";
+import { PluginRuntime } from "./plugin-runtime.js";
+import { OsSecretProvider } from "./drivers.js";
 import { createServer } from "./server.js";
 import { StateHubService } from "./service.js";
 import { ClaimTtlScheduler } from "./ttl-scheduler.js";
@@ -38,11 +40,13 @@ if (instanceCount.count === 0) {
     .run();
 }
 
-const drivers = new DriverRegistry(db, events);
+const pluginRuntime = new PluginRuntime(plugins, config.dataDir);
+await pluginRuntime.startAll();
+const drivers = new DriverRegistry(db, events, new OsSecretProvider(), pluginRuntime);
 const dispatcher = new DeliveryDispatcher(db, drivers, events, config.deliveryLeaseMs);
 dispatcher.recoverInterrupted();
 const ttlScheduler = new ClaimTtlScheduler(service, events);
-const app = createServer({ service, events, drivers, dispatcher, plugins, adminToken: config.adminToken });
+const app = createServer({ service, events, drivers, dispatcher, plugins, pluginRuntime, adminToken: config.adminToken });
 const address = await app.listen({ host: config.host, port: config.port });
 const port = Number.parseInt(new URL(address).port, 10);
 const discovery = {
@@ -88,8 +92,12 @@ const stop = async (): Promise<void> => {
   ttlScheduler.stop();
   dispatcher.stop();
   drivers.invalidate();
-  await app.close();
-  db.close();
+  try {
+    await app.close();
+  } finally {
+    await pluginRuntime.stopAll();
+    db.close();
+  }
   try {
     unlinkSync(config.discoveryPath);
   } catch {

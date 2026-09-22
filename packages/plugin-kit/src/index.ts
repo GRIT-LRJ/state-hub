@@ -50,7 +50,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function safePath(path: string): boolean {
-  return path.length > 0 && !path.startsWith("/") && !path.includes("\\") &&
+  return path.length > 0 && path.split("/")[0]?.toLowerCase() !== ".statehub-runtime" &&
+    !path.startsWith("/") && !path.includes("\\") &&
     !path.includes(":") && !path.includes("\0") &&
     path.split("/").every((part) =>
       part.length > 0 && part !== "." && part !== ".." && !/[. ]$/u.test(part) &&

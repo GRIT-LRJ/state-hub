@@ -59,6 +59,8 @@ describe(".statehub-plugin supply chain", () => {
       .toThrow(/Unsafe plugin archive path/u);
     expect(() => verifyPlugin(zipSync({ "CON.txt": Buffer.from("bad") }), new Map()))
       .toThrow(/Unsafe plugin archive path/u);
+    expect(() => verifyPlugin(zipSync({ ".STATEHUB-RUNTIME": Buffer.from("bad") }), new Map()))
+      .toThrow(/Unsafe plugin archive path/u);
   });
 
   it("accepts unsigned archives only with explicit development mode", () => {

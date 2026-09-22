@@ -19,11 +19,16 @@ export class FrameDecoder {
   #buffer = Buffer.alloc(0);
 
   push(chunk: Buffer): unknown[] {
+    if (chunk.length > 16 * 1024 * 1024) throw new Error("Plugin frame chunk exceeds limit");
     this.#buffer = Buffer.concat([this.#buffer, chunk]);
     const messages: unknown[] = [];
     while (true) {
       const boundary = this.#buffer.indexOf("\r\n\r\n");
-      if (boundary < 0) break;
+      if (boundary < 0) {
+        if (this.#buffer.length > 8192) throw new Error("Plugin frame header exceeds limit");
+        break;
+      }
+      if (boundary > 8192) throw new Error("Plugin frame header exceeds limit");
       const header = this.#buffer.subarray(0, boundary).toString("ascii");
       const match = /^Content-Length:\s*(\d+)$/imu.exec(header);
       if (!match?.[1]) throw new Error("Missing Content-Length header");
@@ -111,6 +116,7 @@ export class PluginRpcServer {
 export function runPlugin(plugin: StateHubPlugin): void {
   const server = new PluginRpcServer(plugin);
   const decoder = new FrameDecoder();
+  process.stdin.on("end", () => process.exit(0));
   process.stdin.on("data", (chunk: Buffer) => {
     try {
       for (const message of decoder.push(chunk)) {

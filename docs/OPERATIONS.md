@@ -60,7 +60,7 @@ Hook 是短同步调用：先把命令原子写入 spool，再尝试 800ms loopb
 
 管理 API 使用 Tauri 注入的临时管理会话。先向 `POST /api/v1/admin/plugins/trusted-publishers` 提交 publisher ID 和 Ed25519 PEM 公钥，再将确定性的 `.statehub-plugin` 原始字节以 `application/vnd.statehub.plugin` 发送到 `POST /api/v1/admin/plugins/install`。`GET /api/v1/admin/plugins` 只列安装元数据与包哈希；`GET /api/v1/admin/catalog` 立即显示安装后的来源、驱动定义和动作契约。安装记录与信任库保存在 SQLite，不保存私钥或管理令牌。
 
-正式模式拒绝未签名包。仅在受控开发运行中设置 `STATE_HUB_PLUGIN_DEVELOPMENT_MODE=true` 才允许安装并使用未签名定义；恢复正式模式后这些定义不会进入 Catalog 或来源校验。安装会检查全部 checksum、签名、许可证、当前平台入口和 JSON Schema，失败不改变 Catalog。此阶段提供安装与定义注册；插件执行、升级和卸载分别由后续 Issue 完成。
+正式模式拒绝未签名包。仅在受控开发运行中设置 `STATE_HUB_PLUGIN_DEVELOPMENT_MODE=true` 才允许安装并使用未签名定义；恢复正式模式后这些定义不会进入 Catalog 或来源校验。安装会检查全部 checksum、签名、许可证、当前平台入口和 JSON Schema，失败不改变 Catalog。插件安装后，Core 为每个启用的包启动一个独立进程；`GET /api/v1/admin/plugins/runtime` 返回包级运行状态、PID 与安全原因码。`POST /api/v1/admin/plugins/:id/disable` 停止进程并从可用 Catalog 移除定义，`POST /api/v1/admin/plugins/:id/enable` 重新验包、握手、健康检查后恢复。插件超时、异常退出或协议错误不会直接使 Core 退出；下一次相关投递可尝试重建进程。重新启用成功会向该插件驱动补发当前 stateful 投影，不补发历史 queued-effect。插件升级和依赖感知卸载分别由后续 Issue 完成。
 
 ## VK87
 

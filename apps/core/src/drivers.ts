@@ -6,6 +6,7 @@ import type { ActionPayload, DriverActionRequest, DriverActionResult } from "@st
 import type { StateHubDatabase } from "./database.js";
 import type { HubEventBus } from "./events.js";
 import { authorizeHttpTarget, type ResolvedTargetAddress } from "./http-target-policy.js";
+import type { PluginRuntime } from "./plugin-runtime.js";
 
 export interface Driver {
   execute(request: DriverActionRequest): Promise<DriverActionResult>;
@@ -309,6 +310,7 @@ export class DriverRegistry {
     private readonly db: StateHubDatabase,
     private readonly events: HubEventBus,
     private readonly secrets: SecretProvider = new OsSecretProvider(),
+    private readonly plugins?: PluginRuntime,
   ) {}
 
   get(instanceId: string): Driver | undefined {
@@ -324,7 +326,9 @@ export class DriverRegistry {
     else if (row.driver_type === "http") driver = new GenericHttpDriver(config as unknown as HttpDriverConfig);
     else if (row.driver_type === "pushplus") driver = new PushPlusDriver(config as unknown as PushPlusConfig, this.secrets);
     else if (row.driver_type === "vk87") driver = new Vk87Driver(config.profile);
-    else return undefined;
+    else if (this.plugins?.hasDriver(row.driver_type)) {
+      driver = { execute: async (request) => await this.plugins!.execute(row.driver_type, request, config) };
+    } else return undefined;
     this.#cache.set(instanceId, driver);
     return driver;
   }

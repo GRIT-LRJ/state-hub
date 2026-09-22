@@ -7,6 +7,7 @@ import type { DeliveryDispatcher } from "./dispatcher.js";
 import type { HubEventBus } from "./events.js";
 import { HubError, type PublishedConfig, type SnapshotClaim, type StateHubService } from "./service.js";
 import { PluginInstallError, PluginRepository } from "./plugin-repository.js";
+import type { PluginRuntime } from "./plugin-runtime.js";
 
 interface ServerOptions {
   service: StateHubService;
@@ -15,6 +16,7 @@ interface ServerOptions {
   dispatcher: DeliveryDispatcher;
   adminToken: string;
   plugins?: PluginRepository;
+  pluginRuntime?: PluginRuntime;
 }
 
 function bearerToken(request: FastifyRequest): string | undefined {
@@ -230,6 +232,34 @@ export function createServer(options: ServerOptions): FastifyInstance {
   app.get("/api/v1/admin/catalog", { preHandler: adminAuth }, async () => plugins.catalog());
 
   app.get("/api/v1/admin/plugins", { preHandler: adminAuth }, async () => ({ plugins: plugins.installed() }));
+  app.get("/api/v1/admin/plugins/runtime", { preHandler: adminAuth }, async () =>
+    ({ plugins: options.pluginRuntime?.statuses() ?? [] }));
+
+  app.post("/api/v1/admin/plugins/:id/disable", { preHandler: adminAuth }, async (request) => {
+    const { id } = request.params as { id: string };
+    if (!plugins.installed().some((plugin) => plugin.id === id)) {
+      throw new PluginInstallError("PLUGIN_NOT_FOUND", "Plugin package was not found", 404);
+    }
+    await options.pluginRuntime?.stop(id);
+    plugins.setEnabled(id, false);
+    options.drivers.invalidate();
+    return { id, enabled: false };
+  });
+
+  app.post("/api/v1/admin/plugins/:id/enable", { preHandler: adminAuth }, async (request) => {
+    const { id } = request.params as { id: string };
+    const wasRunning = options.pluginRuntime?.statuses().some((entry) =>
+      entry.id === id && entry.status === "running");
+    plugins.setEnabled(id, true);
+    const runtime = options.pluginRuntime ? await options.pluginRuntime.start(id) : undefined;
+    options.drivers.invalidate();
+    if (runtime?.status === "running" && !wasRunning) {
+      for (const instanceId of plugins.driverInstanceIds(id)) {
+        options.dispatcher.recoverCurrentStateful(instanceId);
+      }
+    }
+    return { id, enabled: true, ...(runtime ? { runtime } : {}) };
+  });
 
   app.get("/api/v1/admin/plugins/trusted-publishers", { preHandler: adminAuth }, async () =>
     ({ publishers: plugins.trustedPublishers() }));
@@ -247,7 +277,9 @@ export function createServer(options: ServerOptions): FastifyInstance {
       if (request.headers["content-type"] !== "application/vnd.statehub.plugin" || !Buffer.isBuffer(request.body)) {
         throw new PluginInstallError("INVALID_PLUGIN_UPLOAD", "A binary plugin package is required");
       }
-      return await reply.code(201).send(plugins.install(request.body));
+      const installed = plugins.install(request.body);
+      const runtime = options.pluginRuntime ? await options.pluginRuntime.start(installed.id) : undefined;
+      return await reply.code(201).send({ ...installed, ...(runtime ? { runtime } : {}) });
     });
 
   app.post("/api/v1/admin/producers", { preHandler: adminAuth }, async (request, reply) => {

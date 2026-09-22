@@ -1,7 +1,7 @@
 import { createHash, createPublicKey } from "node:crypto";
 import AjvModule from "ajv";
 import addFormatsModule from "ajv-formats";
-import { verifyPlugin } from "@state-hub/plugin-kit";
+import { verifyPlugin, type VerifiedPlugin } from "@state-hub/plugin-kit";
 import type { DriverDefinition, SourceDefinition } from "@state-hub/protocol";
 import { builtinCatalog } from "./builtins.js";
 import type { StateHubDatabase } from "./database.js";
@@ -12,6 +12,7 @@ interface PackageRow {
   version: string;
   publisher_id: string;
   signed: number;
+  enabled: number;
   archive_sha256: string;
   installed_at: string;
   source_definitions_json: string;
@@ -133,10 +134,20 @@ export class PluginRepository {
     const driverDefinitions = (manifest.driverDefinitions ?? []).map((path) =>
       parseDefinition(files.get(path) as Uint8Array, "driver") as DriverDefinition);
     validateSchemas(sourceDefinitions, driverDefinitions);
-    // Reserve IDs of installed development packages even when production mode hides them.
-    const current = new PluginRepository(this.db, true).catalog();
-    const sourceIds = new Set(current.sourceDefinitions.map((definition) => definition.id));
-    const driverIds = new Set(current.driverDefinitions.map((definition) => definition.id));
+    // Reserve IDs even when a package is disabled or hidden by production mode.
+    const installedDefinitions = this.db.raw.prepare(
+      "SELECT source_definitions_json, driver_definitions_json FROM plugin_packages WHERE active = 1",
+    ).all() as PackageRow[];
+    const sourceIds = new Set([
+      ...builtinCatalog.sourceDefinitions.map((definition) => definition.id),
+      ...installedDefinitions.flatMap((row) =>
+        (JSON.parse(row.source_definitions_json) as SourceDefinition[]).map((definition) => definition.id)),
+    ]);
+    const driverIds = new Set([
+      ...builtinCatalog.driverDefinitions.map((definition) => definition.id),
+      ...installedDefinitions.flatMap((row) =>
+        (JSON.parse(row.driver_definitions_json) as DriverDefinition[]).map((definition) => definition.id)),
+    ]);
     for (const source of sourceDefinitions) {
       if (sourceIds.has(source.id)) throw new PluginInstallError("DUPLICATE_PLUGIN_DEFINITION", "Source definition ID already exists", 409);
       sourceIds.add(source.id);
@@ -167,17 +178,18 @@ export class PluginRepository {
       signed: verified.signed, archiveSha256 };
   }
 
-  installed(): Array<{ id: string; version: string; publisher: string; signed: boolean; archiveSha256: string; installedAt: string }> {
+  installed(): Array<{ id: string; version: string; publisher: string; signed: boolean; enabled: boolean; archiveSha256: string; installedAt: string }> {
     const rows = this.db.raw.prepare(
-      "SELECT id, version, publisher_id, signed, archive_sha256, installed_at FROM plugin_packages WHERE active = 1 ORDER BY id",
+      "SELECT id, version, publisher_id, signed, enabled, archive_sha256, installed_at FROM plugin_packages WHERE active = 1 ORDER BY id",
     ).all() as PackageRow[];
     return rows.map((row) => ({ id: row.id, version: row.version, publisher: row.publisher_id,
-      signed: row.signed === 1, archiveSha256: row.archive_sha256, installedAt: row.installed_at }));
+      signed: row.signed === 1, enabled: row.enabled === 1,
+      archiveSha256: row.archive_sha256, installedAt: row.installed_at }));
   }
 
   catalog(): Catalog {
     const rows = this.db.raw.prepare(
-      "SELECT source_definitions_json, driver_definitions_json FROM plugin_packages WHERE active = 1 AND (signed = 1 OR ? = 1) ORDER BY id",
+      "SELECT source_definitions_json, driver_definitions_json FROM plugin_packages WHERE active = 1 AND enabled = 1 AND (signed = 1 OR ? = 1) ORDER BY id",
     ).all(this.developmentMode ? 1 : 0) as PackageRow[];
     return {
       sourceDefinitions: [...builtinCatalog.sourceDefinitions,
@@ -185,6 +197,66 @@ export class PluginRepository {
       driverDefinitions: [...builtinCatalog.driverDefinitions,
         ...rows.flatMap((row) => JSON.parse(row.driver_definitions_json) as DriverDefinition[])],
     };
+  }
+
+  setEnabled(id: string, enabled: boolean): void {
+    const changed = this.db.raw.prepare(
+      "UPDATE plugin_packages SET enabled = ? WHERE id = ? AND active = 1",
+    ).run(enabled ? 1 : 0, id);
+    if (changed.changes !== 1) throw new PluginInstallError("PLUGIN_NOT_FOUND", "Plugin package was not found", 404);
+  }
+
+  runtimePackageIds(): string[] {
+    return (this.db.raw.prepare(
+      "SELECT id FROM plugin_packages WHERE active = 1 AND enabled = 1 AND (signed = 1 OR ? = 1) ORDER BY id",
+    ).all(this.developmentMode ? 1 : 0) as Array<{ id: string }>).map((row) => row.id);
+  }
+
+  packageForDriver(driverType: string): string | undefined {
+    const rows = this.db.raw.prepare(
+      "SELECT id, driver_definitions_json FROM plugin_packages WHERE active = 1 AND enabled = 1 AND (signed = 1 OR ? = 1)",
+    ).all(this.developmentMode ? 1 : 0) as Array<{ id: string; driver_definitions_json: string }>;
+    return rows.find((row) =>
+      (JSON.parse(row.driver_definitions_json) as DriverDefinition[]).some((definition) => definition.id === driverType))?.id;
+  }
+
+  driverInstanceIds(id: string): string[] {
+    const row = this.db.raw.prepare(
+      "SELECT driver_definitions_json FROM plugin_packages WHERE id = ? AND active = 1 AND enabled = 1",
+    ).get(id) as { driver_definitions_json: string } | undefined;
+    if (!row) return [];
+    const types = new Set((JSON.parse(row.driver_definitions_json) as DriverDefinition[])
+      .map((definition) => definition.id));
+    return (this.db.raw.prepare("SELECT id, driver_type FROM driver_instances WHERE enabled = 1")
+      .all() as Array<{ id: string; driver_type: string }>)
+      .filter((instance) => types.has(instance.driver_type)).map((instance) => instance.id);
+  }
+
+  runtimePackage(id: string): VerifiedPlugin {
+    const row = this.db.raw.prepare(
+      "SELECT version, signed, archive_sha256, archive_blob FROM plugin_packages WHERE id = ? AND active = 1 AND enabled = 1",
+    ).get(id) as { version: string; signed: number; archive_sha256: string; archive_blob: Buffer } | undefined;
+    if (!row || (row.signed !== 1 && !this.developmentMode)) {
+      throw new PluginInstallError("PLUGIN_UNAVAILABLE", "Plugin package is unavailable");
+    }
+    if (createHash("sha256").update(row.archive_blob).digest("hex") !== row.archive_sha256) {
+      throw new PluginInstallError("PLUGIN_ARCHIVE_CHANGED", "Installed plugin archive failed integrity verification");
+    }
+    const trustRows = this.db.raw.prepare("SELECT id, public_key_pem FROM plugin_publishers")
+      .all() as Array<{ id: string; public_key_pem: string }>;
+    let verified: VerifiedPlugin;
+    try {
+      verified = verifyPlugin(row.archive_blob, new Map(trustRows.map((entry) => [entry.id, entry.public_key_pem])), {
+        developmentMode: this.developmentMode,
+      });
+    } catch {
+      throw new PluginInstallError("PLUGIN_ARCHIVE_CHANGED", "Installed plugin archive failed integrity verification");
+    }
+    if (verified.manifest.id !== id || verified.manifest.version !== row.version ||
+      verified.signed !== (row.signed === 1)) {
+      throw new PluginInstallError("PLUGIN_ARCHIVE_CHANGED", "Installed plugin record does not match its archive");
+    }
+    return verified;
   }
 
   sourceDefinition(id: string): SourceDefinition | undefined {

@@ -161,6 +161,7 @@ export interface DriverActionRequest {
   resourceChannel: string;
   actionKind: ActionKind;
   action: ActionPayload | null;
+  instanceConfig?: Record<string, unknown>;
   projectionRevision?: number;
   deadlineAt?: string;
   batchId?: string;
