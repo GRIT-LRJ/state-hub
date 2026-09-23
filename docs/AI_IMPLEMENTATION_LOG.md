@@ -675,3 +675,54 @@ PASS。
 ### Commit
 
 产品实现 `7d6734c`。
+
+
+## Issue #19 — 暂停、确认和诊断管理
+
+### 这张 Issue 要解决什么
+
+让用户在桌面查看当前声明与输出、确认某条声明的特定版本，并在导出支持包前了解其中有哪些文件、哪些内容会被隐藏。暂停和恢复继续由已有桌面按钮控制。
+
+### 原来有什么问题
+
+桌面只有暂停按钮和只读的声明表，没有确认入口，也没有支持包预览或导出入口。声明表没有显示 revision，旧的拼接式行键遇到特殊字符可能冲突。暂停请求失败时界面没有明确反馈。
+
+### 我改了什么
+
+声明表展示每条 claim 的 revision，展开后可查看当前值；确认前展示 producer、scope、signal 三元身份与 revision，再把这四项原样交给 Core。诊断面板先读取文件清单与脱敏范围，预览明确标记含敏感内容时不允许导出。用户确认导出后才从 Core 获取已脱敏支持包，通过系统保存对话框写入选定位置。暂停失败显示固定的安全提示。
+
+### 为什么这样改
+
+确认必须由 Core 在数据库事务中验证当前 revision，桌面只提交用户看到的具体版本；这样旧页面不能确认更新后的事实。支持包的脱敏由 Core 完成，桌面不把任意错误正文回显；原生写入只接受有界的版本化 JSON，并且文件路径只来自系统保存对话框。
+
+### 哪些文件发生变化
+
+桌面的 `RuntimeManager.tsx`、`runtime-management.ts`、`App.tsx`、`api.ts`、样式/文案与 UI/真实 Core 验收测试；Tauri 的 `support_bundle.rs`、`lib.rs`、`Cargo.toml` 与 lockfile。新增 Rust 原生 dialog 插件，用于系统保存对话框。
+
+### 数据库是否变化
+
+没有 schema、migration 或 backfill。确认继续写入已有 acknowledgements 表，并由 Core 事务核对 claim revision；暂停继续使用已有持久设置。支持包导出是只读操作。
+
+### 外部行为是否变化
+
+用户可在 UI 精确确认声明版本，过期版本会收到固定的 `CLAIM_REVISION_MISMATCH`，不会误确认新事实。支持包保存前显示一个文件的清单和脱敏范围；取消系统对话框不会写文件。暂停失败会显示可见提示，声明表的行身份改为无歧义元组。
+
+### 风险
+
+展开声明会在本机界面显示其原始业务值，默认折叠；支持包仍由 Core 脱敏，桌面和原生写入都不向日志输出原始正文。原生保存对话框已编译和单测，真实 Windows/macOS/Linux 安装包中的手工 GUI 操作待 #23 smoke 验证。首次补装 Rust 工具链并编译依赖耗时较长，不影响产品运行时路径。
+
+### 测试
+
+桌面 UI 测试验证确认发送准确身份与 revision、陈旧版本显示安全错误、清单和脱敏范围先于导出显示、标记不安全的文件无法导出。真实 Core/桌面验收覆盖两个 claim、多绑定 honor 开关、旧 revision 拒绝、新 revision 独立生效、暂停期间输入更新、恢复只呈现当前状态；本地 HTTP 服务直接统计暂停时事件请求为零、恢复后的新事件请求为一。诊断验收检查支持包不含测试邮箱、事件正文或生产者 Token。Rust 单测验证原生写入只接受有界的 v1 JSON，且可正确落盘。最终 `pnpm test`、`pnpm test:acceptance`、`pnpm check`、`pnpm build` 全部通过；Core 单测 82/82、桌面单测 21/21、Core acceptance 16 文件、桌面 acceptance 3 文件 4/4；`cargo check --lib`、`cargo fmt --check` 与 `cargo test --lib` 6/6 通过。
+
+### Reviewer 曾发现的问题
+
+Review 发现暂停请求失败没有 UI 反馈，现显示固定提示；确认失败原先只会显示在下方诊断区，现移到面板顶部。声明列表原拼接行键可能把不同身份映射成同一字符串，现改成无歧义元组。为保证导出真的落盘，补了 Tauri 系统保存对话框和有界版本检查。Rust 依赖首次下载曾因 Cargo HTTP 多路复用发生 TLS 失败，关闭多路复用后成功；与原生编译并发运行的接受测试异常缓慢，主动停止后在无争用状态完整重跑并通过。跨 #16–#19 集成审查复核了 SSE 快照、配置并发发布、暂停状态、来源管理和诊断边界，未发现组合 blocker。最终 Critical 0、High 0；Spec PASS、Correctness architecture PASS、Security PASS、Crash/Recovery PASS。
+
+### 最终状态
+
+PASS。
+
+### Commit
+
+产品实现 `fe70d5e`。
