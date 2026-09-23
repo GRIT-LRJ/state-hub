@@ -74,6 +74,8 @@ Hook 是短同步调用：先把命令原子写入 spool，再尝试 800ms loopb
 
 配置不匹配、报告不是完整 65 字节或设备数量不是 1 时拒绝写入。测试不会向设备发送报告；真实硬件 smoke 必须由人工明确触发。
 
+人工真机验收先运行 `pnpm --filter @state-hub/core build`。确认连接的是目标 VK87、当前没有其他程序控制灯带后，在交互式终端设置 `STATE_HUB_ALLOW_REAL_VK87=1`，再执行 `node apps/core/scripts/vk87-manual-smoke.mjs --write-real-vk87`。脚本只使用仓库内已核实的 profile，依次发送 decision 和 idle 恢复报告；选择器不唯一或报告不完整时拒绝写入。缺少环境变量、明确参数或交互式终端时脚本只显示说明，不加载 HID 或写设备。自动测试只通过 fake HID 运行。
+
 ## 发布门禁
 
 标准验证必须包含 `pnpm test`、`pnpm test:acceptance`、`pnpm check` 和 `pnpm build`。process-level acceptance 保持独立，不混入普通 unit test。

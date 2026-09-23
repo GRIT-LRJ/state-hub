@@ -249,6 +249,9 @@ interface Vk87Profile {
 }
 
 function verifyVk87Profile(value: unknown): Vk87Profile {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("VK87 profile does not match the verified device selector");
+  }
   const profile = value as Partial<Vk87Profile>;
   if (
     profile.enabled !== true ||
@@ -277,13 +280,20 @@ export class Vk87Driver implements Driver {
   }
 
   async execute(request: DriverActionRequest): Promise<DriverActionResult> {
+    const action = request.action?.name ?? "idle";
+    if (request.actionKind !== "stateful" || !["completed", "decision", "idle"].includes(action)) {
+      return { status: "dead-letter", detail: "VK87_ACTION_UNSUPPORTED" };
+    }
     let module: typeof import("node-hid");
     try {
       module = await import("node-hid");
     } catch {
       return { status: "retry", detail: "node-hid is not available on this platform" };
     }
-    const candidates = module.HID.devices().filter(
+    let devices: ReturnType<typeof module.HID.devices>;
+    try { devices = module.HID.devices(); }
+    catch { return { status: "retry", detail: "VK87_ENUMERATION_FAILED" }; }
+    const candidates = devices.filter(
       (device) =>
         device.vendorId === this.#profile.vendorId &&
         device.productId === this.#profile.productId &&
@@ -294,21 +304,25 @@ export class Vk87Driver implements Driver {
     if (candidates.length !== 1 || !candidates[0]?.path) {
       return { status: "retry", detail: `Expected exactly one writable VK87 interface, found ${candidates.length}` };
     }
-    const action = request.action?.name ?? "idle";
     const reportHex =
       action === "completed"
         ? this.#profile.completedReportHex
         : action === "decision"
           ? this.#profile.decisionReportHex
           : this.#profile.restoreReportHex;
-    const device = new module.HID(candidates[0].path);
+    let device: InstanceType<typeof module.HID>;
+    try { device = new module.HID(candidates[0].path); }
+    catch { return { status: "retry", detail: "VK87_OPEN_FAILED" }; }
     try {
+      // node-hid includes the report ID differently in returned byte counts across backends.
+      // The verified argument is always the complete 65-byte feature report.
       device.sendFeatureReport([...Buffer.from(reportHex, "hex")]);
       return { status: "delivered" };
-    } catch (error) {
-      return { status: "retry", detail: error instanceof Error ? error.message : String(error) };
+    } catch {
+      return { status: "retry", detail: "VK87_WRITE_FAILED" };
     } finally {
-      device.close();
+      try { device.close(); }
+      catch { /* A completed write must not be retried because closing failed. */ }
     }
   }
 }

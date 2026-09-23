@@ -28,6 +28,7 @@ interface WaitOptions {
 }
 
 interface CoreAcceptanceHarnessOptions {
+  childEnvironment?: NodeJS.ProcessEnv;
   deliveryLeaseMs?: number;
   pluginDevelopmentMode?: boolean;
   upgradeCrashAfterCommit?: boolean;
@@ -501,6 +502,7 @@ export class CoreAcceptanceHarness {
       stdio: [this.options.supervisedStdin ? "pipe" : "ignore", "pipe", "pipe", "ipc"],
       env: {
         ...childEnvironment,
+        ...this.options.childEnvironment,
         STATE_HUB_ADMIN_TOKEN: this.adminToken,
         STATE_HUB_DATA_DIR: this.paths.data,
         STATE_HUB_RUNTIME_DIR: this.paths.runtime,
