@@ -21,7 +21,7 @@
 | #15 统一历史保留 | PASS | Medium | 无 / #2 | 保留预算、持久防重身份 | 已完成 | PASS | Spec/Correctness PASS | 4d3c178 |
 | #16 Sidecar 与 SSE 恢复 | PASS | High | 无 / #2 | 桌面进程监督、快照后订阅、禁用端口重选 | 已完成 | pnpm verify；Rust 单测/格式 PASS | Spec/Correctness/Security/Recovery PASS | 49e9745（基础设施 2665147） |
 | #17 来源与 PushPlus 管理 | PASS | High | 无 / #2、#16 | 来源 Token、OS 凭据引用、PushPlus UI 与业务码 | 已完成 | 四项门禁；Rust 5/5 PASS | Spec/Correctness/Security/Recovery PASS | 735c148 |
-| #18 驱动与配置管理 UI | TODO | High | #10 / #2、#16 | DriverInstance、Binding、revision UI | 是，待 #16 验收 | 待运行 | 待审查 | — |
+| #18 驱动与配置管理 UI | PASS | High | #10 / #2、#16 | 宿主 Schema 表单、Binding、草案/版本/回滚、旧草案并发保护 | 已完成 | 四项门禁 PASS | Spec/Correctness/Security/Recovery PASS | 7d6734c |
 | #19 暂停、确认与诊断 UI | TODO | High | #7、#14 / #2、#16 | 运行管理、确认、支持包 | 是 | 待运行 | 待审查 | — |
 | #20 Codex spool 验收 | TODO | High | 无 / #2、#8、#9 | hook、spool、drain 黑盒验收 | 是 | 待运行 | 待审查 | — |
 | #21 VK87 契约验收 | TODO | High | 无 / #2 | fake HID、选择器、65 字节 profile | 是 | 待运行 | 待审查 | — |

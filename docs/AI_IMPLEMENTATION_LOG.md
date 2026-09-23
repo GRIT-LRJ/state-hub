@@ -622,3 +622,56 @@ PASS。
 ### Commit
 
 产品实现 `735c148`。
+
+
+## Issue #18 — 驱动、绑定与配置版本管理
+
+### 这张 Issue 要解决什么
+
+让用户在桌面应用里创建、编辑、启停驱动和绑定，通过结构化表单设置条件和动作映射，并在看过 Core 的校验与影响预览后发布。用户还可以查看版本并通过新版本回滚。
+
+### 原来有什么问题
+
+桌面只有 Codex 到虚拟输出的快速配置。其他驱动和绑定必须借助 API 操作；快速配置会用自己的单项配置覆盖已经存在的其他输出。Core 虽能保存草案和回滚，却缺少版本列表 API；并发管理员可能发布一个依据旧配置预览的草案，覆盖更新版本。
+
+### 我改了什么
+
+新增宿主渲染的配置面板。驱动表单读取 Catalog 中的配置 schema；绑定表单提供来源选择、条件、常量、JSON Pointer 和模板映射、目标动作、优先级及投递选项。编辑先保留在当前页面，Core 校验成功并返回影响预览后才出现发布操作。新增版本列表 API、历史版本查看及“回滚为新草案”流程。快速配置现在合并到当前配置，保留已有驱动与绑定。
+
+Core 在草案中记下预览时的已发布版本，并在发布事务内核对。其他管理员先发布了新版本时，旧草案会被拒绝，要求重新预览。
+
+### 为什么这样改
+
+Catalog schema 由宿主表单渲染，插件不能插入 React 或执行用户 JavaScript。让 Core 执行最终配置校验与原子发布，桌面只负责编辑和展示。草案的基线检查放在 SQLite 发布事务中，才能关闭桌面读取配置与实际提交之间的并发空窗。
+
+### 哪些文件发生变化
+
+Core 的 `service.ts`、`server.ts` 及配置/投递测试；桌面的 `ConfigManager.tsx`、`ConditionsField.tsx`、`MappingField.tsx`、`config-forms.ts`、`config-management.ts`、`api.ts`、`App.tsx`、样式/文案和 UI/真实 Core 验收测试；桌面依赖与 lockfile。
+
+### 数据库是否变化
+
+没有 schema migration 或 backfill。已有 `config_revisions.impact_json` 新增 `basePublishedRevision` 元数据。旧版本创建、没有基线信息的未发布草案不能直接发布，需要重新预览；已发布版本不受影响。
+
+### 外部行为是否变化
+
+桌面新增完整配置管理入口；管理 API 新增需要管理员授权的分页版本列表。陈旧草案发布返回 `CONFIG_STALE_DRAFT`，不会覆盖新配置。快速配置保留其他输出，遇到约定 ID 冲突时拒绝覆盖。回滚仍创建新 revision；历史事件不重放。
+
+### 风险
+
+修改驱动或禁用绑定可能改变当前输出，因此发布前展示 Core 计算的影响，Core 仍拒绝移除有未完成投递或活动输出的驱动。旧草案要重新预览。配置管理面板按需加载，首次打开会多下载一个表单依赖模块；构建通过，尚未做真实三平台 GUI 安装包 smoke。
+
+### 测试
+
+桌面 UI 测试在无硬件环境创建 Virtual、编辑 Core 默认旧类型别名的 Virtual，编辑条件及三种映射，阻止无效 JSON 保存，验证插件 schema 文本不会执行 HTML，以及陈旧配置不能发布。真实 Core/桌面验收以实际 HTTP 接收次数验证无效配置被拒绝、预览、发布、回滚形成新 revision、历史事件不重放、新事件仍投递。Core 单测覆盖并发草案顺序、旧草案拒绝和安全移除驱动。最终 `pnpm test`、`pnpm test:acceptance`、`pnpm check`、`pnpm build` 全部通过。
+
+### Reviewer 曾发现的问题
+
+审查发现快速配置会覆盖其他输出，已改为合并；桌面仅比较本地配置仍存在发布竞态，已增加事务内草案基线检查。首次表单无法编辑常量和条件比较值，已加入宿主 JSON 控件并阻止无效内容保存。Core 默认 Virtual 的旧类型名无法通过新版枚举，现允许 Catalog 已知的合法别名。新并发规则使一项旧测试尝试发布过期草案而失败，测试已改为要求重新预览，同时继续验证投递保护。最终 Critical 0、High 0；Spec PASS、Correctness architecture PASS、Security PASS、Crash/Recovery PASS。
+
+### 最终状态
+
+PASS。
+
+### Commit
+
+产品实现 `7d6734c`。
