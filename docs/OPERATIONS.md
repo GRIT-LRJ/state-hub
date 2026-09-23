@@ -78,6 +78,8 @@ Hook 是短同步调用：先把命令原子写入 spool，再尝试 800ms loopb
 
 ## 发布门禁
 
+容量与延迟验收运行 `pnpm test:performance`。脚本启动真实 loopback Core 和临时 SQLite，发布 50 个来源、50 个虚拟输出及 500 条绑定；先以每 10 毫秒一条的节奏提交 500 条事件，再以最多 64 个在途 HTTP 请求提交 1000 条突发事件，强杀并重启 Core 后再测 100 条。输出包含 CPU、内存、Node/平台、各阶段 P50/P95/P99、接受速率、dispatcher 排空时间和投递总数。持续、突发、恢复阶段的 HTTP 接受 P95 均须不超过 100 毫秒；全部 1650 次虚拟投递须完成且没有死信。发布环境应在空闲、规格固定的机器上重复运行并保存标准输出作为证据；共享 CI 机器的结果应连同环境信息审查。
+
 标准验证必须包含 `pnpm test`、`pnpm test:acceptance`、`pnpm check` 和 `pnpm build`。process-level acceptance 保持独立，不混入普通 unit test。
 
 stable v1 前必须在 Windows x64、macOS 实际目标架构和 Linux x64 分别执行安装/升级/卸载、单实例、托盘、开机启动、暂停恢复、断网重连与签名验证。未实测架构只能标记 preview。

@@ -196,6 +196,7 @@ function plusMilliseconds(iso: string, milliseconds: number): string {
 
 export class StateHubService {
   readonly maxScopesPerProducer = 100;
+  #bindingsCache: { revision: number | null; bindings: Binding[] } | undefined;
 
   constructor(
     readonly db: StateHubDatabase,
@@ -211,9 +212,14 @@ export class StateHubService {
   }
 
   listBindings(): Binding[] {
-    return (this.db.raw.prepare("SELECT payload_json FROM bindings ORDER BY id").all() as BindingRow[]).map(
+    const revision = (this.db.raw.prepare("SELECT MAX(config_revision) AS revision FROM bindings")
+      .get() as { revision: number | null }).revision;
+    if (this.#bindingsCache?.revision === revision) return this.#bindingsCache.bindings;
+    const bindings = (this.db.raw.prepare("SELECT payload_json FROM bindings ORDER BY id").all() as BindingRow[]).map(
       (row) => JSON.parse(row.payload_json) as Binding,
     );
+    this.#bindingsCache = { revision, bindings };
+    return bindings;
   }
 
   listClaims(): StateClaim[] {
