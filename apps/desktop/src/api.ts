@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ManagedConfig } from "./config-management.js";
 
 export interface CoreConnection {
   endpoint: string;
@@ -61,7 +62,44 @@ export async function setOutputsPaused(paused: boolean): Promise<void> {
   if (!response.ok) throw new Error(`Core returned HTTP ${response.status}`);
 }
 
+export function mergeCodexVirtual(current: ManagedConfig): ManagedConfig {
+  const virtual = current.driverInstances.find((entry) => entry.id === "virtual-main");
+  if (virtual && !["virtual", "official.virtual"].includes(virtual.driverType)) {
+    throw new Error("VIRTUAL_INSTANCE_ID_CONFLICT");
+  }
+  const existingBinding = current.bindings.find((entry) => entry.id === "codex-status-to-virtual");
+  if (existingBinding && (existingBinding.target.driverInstanceId !== "virtual-main" ||
+    existingBinding.target.actionName !== "render" || existingBinding.target.actionKind !== "stateful")) {
+    throw new Error("CODEX_BINDING_ID_CONFLICT");
+  }
+  const binding: ManagedConfig["bindings"][number] = {
+    id: "codex-status-to-virtual",
+    name: "Codex 状态 → 虚拟输出",
+    enabled: true,
+    selector: { producerId: "codex", scopePattern: "*", signalId: "status" },
+    conditions: [],
+    mapping: {
+      phase: { kind: "pointer", pointer: "/phase" },
+      turnId: { kind: "pointer", pointer: "/turnId" },
+    },
+    target: { driverInstanceId: "virtual-main", resourceChannel: "codex-status",
+      actionKind: "stateful", actionName: "render" },
+    honorAcknowledgement: true,
+  };
+  return {
+    driverInstances: virtual ? current.driverInstances.map((entry) =>
+      entry.id === virtual.id ? { ...entry, enabled: true } : entry) :
+      [...current.driverInstances, { id: "virtual-main", driverType: "virtual", enabled: true, config: {} }],
+    bindings: existingBinding ? current.bindings : [...current.bindings, binding],
+  };
+}
+
 export async function provisionCodexVirtual(): Promise<{ revision: number; impact: Record<string, unknown> }> {
+  const exported = await coreFetch("/api/v1/admin/config/export");
+  if (!exported.ok) throw new Error(`Configuration export returned HTTP ${exported.status}`);
+  const { config: current } = await exported.json() as { config: ManagedConfig };
+  const config = mergeCodexVirtual(current);
+  await invoke("secret_status", { reference: "producer:codex" });
   const producerResponse = await coreFetch("/api/v1/admin/producers", {
     method: "POST",
     body: JSON.stringify({ producerId: "codex", sourceDefinitionId: "official.codex" }),
@@ -69,29 +107,6 @@ export async function provisionCodexVirtual(): Promise<{ revision: number; impac
   if (!producerResponse.ok) throw new Error(`Producer registration returned HTTP ${producerResponse.status}`);
   const producer = (await producerResponse.json()) as { token: string };
   await invoke("store_secret", { reference: "producer:codex", value: producer.token });
-  const config = {
-    driverInstances: [{ id: "virtual-main", driverType: "virtual", enabled: true, config: {} }],
-    bindings: [
-      {
-        id: "codex-status-to-virtual",
-        name: "Codex 状态 → 虚拟输出",
-        enabled: true,
-        selector: { producerId: "codex", scopePattern: "*", signalId: "status" },
-        conditions: [],
-        mapping: {
-          phase: { kind: "pointer", pointer: "/phase" },
-          turnId: { kind: "pointer", pointer: "/turnId" },
-        },
-        target: {
-          driverInstanceId: "virtual-main",
-          resourceChannel: "codex-status",
-          actionKind: "stateful",
-          actionName: "render",
-        },
-        honorAcknowledgement: true,
-      },
-    ],
-  };
   const response = await coreFetch("/api/v1/admin/config/drafts", { method: "POST", body: JSON.stringify(config) });
   if (!response.ok) throw new Error(`Configuration preview returned HTTP ${response.status}`);
   return (await response.json()) as { revision: number; impact: Record<string, unknown> };

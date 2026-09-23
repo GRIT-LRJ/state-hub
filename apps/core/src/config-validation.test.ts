@@ -44,6 +44,31 @@ describe("complete config validation and atomic revision", () => {
     expect(db.raw.prepare("SELECT count(*) AS n FROM config_revisions").get()).toMatchObject({ n: 0 });
   }
 
+  it("rejects a draft if another revision published after its preview, regardless of draft number", () => {
+    const initial = service.createConfigDraft(copy());
+    service.publishConfig(initial.revision);
+    const older = service.createConfigDraft({ ...copy(), bindings: [] });
+    const newerConfig = copy();
+    newerConfig.bindings[0]!.name = "newer";
+    const newer = service.createConfigDraft(newerConfig);
+    service.publishConfig(older.revision);
+    expect(() => service.publishConfig(newer.revision)).toThrowError(
+      expect.objectContaining({ code: "CONFIG_STALE_DRAFT" }));
+    expect(service.exportConfig().bindings).toEqual([]);
+
+    const third = service.createConfigDraft(newerConfig);
+    const fourth = service.createConfigDraft(copy());
+    service.publishConfig(fourth.revision);
+    expect(() => service.publishConfig(third.revision)).toThrowError(
+      expect.objectContaining({ code: "CONFIG_STALE_DRAFT" }));
+    expect(service.exportConfig().bindings).toEqual(copy().bindings);
+
+    const legacy = service.createConfigDraft({ ...copy(), bindings: [] });
+    db.raw.prepare("UPDATE config_revisions SET impact_json = '{}' WHERE revision = ?").run(legacy.revision);
+    expect(() => service.publishConfig(legacy.revision)).toThrowError(
+      expect.objectContaining({ code: "CONFIG_STALE_DRAFT" }));
+  });
+
   it("rejects malformed config, driver schemas, action contracts and missing references before saving a draft", () => {
     rejected({ bindings: [] }, "INVALID_CONFIG_SHAPE");
     const badDriver = copy();

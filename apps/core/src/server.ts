@@ -526,6 +526,28 @@ export function createServer(options: ServerOptions): FastifyInstance {
       }
     }));
 
+  app.get("/api/v1/admin/config/revisions", { preHandler: adminAuth }, async (request, reply) => {
+    const query = request.query as { before?: string; limit?: string };
+    const limit = query.limit === undefined ? 50 : Number(query.limit);
+    const before = query.before === undefined ? undefined : Number(query.before);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100 ||
+      (before !== undefined && (!Number.isSafeInteger(before) || before < 1))) {
+      return await reply.code(400).send({ error: { code: "INVALID_REVISION_PAGE", message: "Invalid revision page" } });
+    }
+    const rows = options.service.db.raw.prepare(
+      `SELECT revision, status, impact_json AS impactJson, created_at AS createdAt,
+              published_at AS publishedAt
+         FROM config_revisions
+        WHERE (? IS NULL OR revision < ?)
+        ORDER BY revision DESC LIMIT ?`,
+    ).all(before ?? null, before ?? null, limit) as Array<{
+      revision: number; status: string; impactJson: string; createdAt: string; publishedAt: string | null;
+    }>;
+    return await reply.send({ revisions: rows.map(({ impactJson, ...row }) => ({
+      ...row, impact: JSON.parse(impactJson) as Record<string, unknown>,
+    })) });
+  });
+
   app.post("/api/v1/admin/config/revisions/:revision/rollback", { preHandler: adminAuth }, async (request, reply) => {
     const sourceRevision = Number.parseInt((request.params as { revision: string }).revision, 10);
     const draft = options.service.createRollbackDraft(sourceRevision);

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { subscribe, type CoreConnection } from "./api.js";
+import { mergeCodexVirtual, subscribe, type CoreConnection } from "./api.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -25,5 +25,32 @@ describe("desktop SSE notice parser", () => {
     expect(notices).toBe(2);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls[0]?.[0]).toBe("http://127.0.0.1:41000/api/v1/admin/events");
+  });
+});
+
+
+describe("Codex Virtual quickstart merge", () => {
+  it("keeps existing outputs and user-edited Codex mapping", () => {
+    const current = {
+      driverInstances: [
+        { id: "virtual-main", driverType: "virtual", enabled: false, config: {} },
+        { id: "other", driverType: "http", enabled: true, config: { baseUrl: "https://example.org" } },
+      ],
+      bindings: [{
+        id: "codex-status-to-virtual", name: "customized", enabled: true,
+        selector: { producerId: "codex", signalId: "status" }, conditions: [],
+        mapping: { phase: { kind: "constant" as const, value: "custom" } },
+        target: { driverInstanceId: "virtual-main", resourceChannel: "codex-status",
+          actionKind: "stateful" as const, actionName: "render" },
+      }],
+    };
+    const merged = mergeCodexVirtual(current);
+    expect(merged.driverInstances).toEqual([
+      { ...current.driverInstances[0], enabled: true }, current.driverInstances[1],
+    ]);
+    expect(merged.bindings).toEqual(current.bindings);
+    expect(() => mergeCodexVirtual({ ...current, driverInstances: [
+      { id: "virtual-main", driverType: "http", enabled: true, config: {} },
+    ] })).toThrow("VIRTUAL_INSTANCE_ID_CONFLICT");
   });
 });

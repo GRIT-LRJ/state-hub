@@ -103,7 +103,11 @@ describe("StateHub vertical slice", () => {
     });
     service.publishConfig(idle.revision);
     await dispatcher.drain();
-    service.publishConfig(removal.revision);
+    expect(() => service.publishConfig(removal.revision)).toThrow(
+      "Configuration changed; preview a new draft",
+    );
+    const settledRemoval = service.createConfigDraft({ bindings: [], driverInstances: [] });
+    service.publishConfig(settledRemoval.revision);
     expect(service.exportConfig().driverInstances).toHaveLength(0);
     expect(service.snapshot().projections).toHaveLength(0);
     expect(service.snapshot().pendingDeliveries).toBe(0);

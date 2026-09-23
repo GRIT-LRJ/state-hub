@@ -7,12 +7,14 @@ import {
 } from "@ant-design/icons";
 import { Alert, Button, Card, ConfigProvider, Empty, Flex, Layout, Modal, Space, Statistic, Table, Tag, Typography, message, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { fetchSnapshot, getConnection, provisionCodexVirtual, publishConfig, setOutputsPaused, subscribe, type RuntimeSnapshot } from "./api.js";
 import { CoreConnectionLoop } from "./connection-loop.js";
 import { SourceManager } from "./SourceManager.js";
+const ConfigManager = lazy(async () => await import("./ConfigManager.js").then((module) =>
+  ({ default: module.ConfigManager })));
 import "./app.css";
 
 const { Header, Content, Footer } = Layout;
@@ -22,6 +24,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [showConfigManager, setShowConfigManager] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const connectionLoop = useRef<CoreConnectionLoop<RuntimeSnapshot> | null>(null);
 
@@ -120,6 +123,12 @@ export default function App() {
             />
           )}
           <SourceManager disabled={!snapshot} onPublished={refresh} />
+          <Button disabled={!snapshot} onClick={() => setShowConfigManager((value) => !value)}>
+            {t("manageConfig")}
+          </Button>
+          {showConfigManager && <Suspense fallback={<Card>{t("loadingConfig")}</Card>}>
+            <ConfigManager disabled={!snapshot} onPublished={refresh} />
+          </Suspense>}
           <Flex gap="middle" wrap="wrap" className="stats">
             <Card><Statistic title={t("revision")} value={snapshot?.revision ?? 0} /></Card>
             <Card><Statistic title={t("claims")} value={snapshot?.claims.length ?? 0} prefix={<BellOutlined />} /></Card>

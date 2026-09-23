@@ -626,7 +626,11 @@ export class StateHubService {
       const claims = this.listClaims();
       const affectedClaims = claims.filter((claim) => changed.some((binding) =>
         bindingMatchesClaim(binding, claim))).length;
+      const published = this.db.raw.prepare(
+        "SELECT revision FROM config_revisions WHERE status = 'published' ORDER BY revision DESC LIMIT 1",
+      ).get() as { revision: number } | undefined;
       const impact = {
+        basePublishedRevision: published?.revision ?? null,
         bindingsAdded: [...nextById.keys()].filter((id) => !currentById.has(id)),
         bindingsRemoved: [...currentById.keys()].filter((id) => !nextById.has(id)),
         bindingsUpdated: [...nextById.keys()].filter((id) =>
@@ -648,9 +652,17 @@ export class StateHubService {
     const now = new Date().toISOString();
     this.db.transaction(() => {
       const draft = this.db.raw
-        .prepare("SELECT status, config_json FROM config_revisions WHERE revision = ?")
-        .get(revision) as { status: string; config_json: string } | undefined;
+        .prepare("SELECT status, config_json, impact_json FROM config_revisions WHERE revision = ?")
+        .get(revision) as { status: string; config_json: string; impact_json: string } | undefined;
       if (!draft || draft.status !== "draft") throw new HubError("CONFIG_DRAFT_NOT_FOUND", "Draft not found", 404);
+      const impact = JSON.parse(draft.impact_json) as { basePublishedRevision?: number | null };
+      const published = this.db.raw.prepare(
+        "SELECT revision FROM config_revisions WHERE status = 'published' ORDER BY revision DESC LIMIT 1",
+      ).get() as { revision: number } | undefined;
+      if (!Object.hasOwn(impact, "basePublishedRevision") ||
+        impact.basePublishedRevision !== (published?.revision ?? null)) {
+        throw new HubError("CONFIG_STALE_DRAFT", "Configuration changed; preview a new draft", 409);
+      }
       const config = JSON.parse(draft.config_json) as PublishedConfig;
       this.validateConfig(config);
       const replacements = new Map(config.driverInstances.map((instance) => [instance.id, instance]));

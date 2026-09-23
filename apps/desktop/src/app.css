@@ -28,3 +28,14 @@ body { margin: 0; min-width: 760px; min-height: 100vh; }
 .managed-producers > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 720px; }
 .management-preview { width: 100%; max-width: 720px; }
 .management-preview pre { max-height: 240px; overflow: auto; padding: 12px; background: #f7f7fa; }
+
+
+.config-manager { margin-bottom: 16px; }
+.config-manager .management-form { display: flex; width: 100%; margin-bottom: 16px; }
+.config-manager form { margin: 16px 0; max-width: 900px; }
+.config-manager .config-actions { margin: 12px 0; }
+.config-manager .management-preview { margin: 12px 0; }
+
+.mapping-field { border: 1px solid #d9d9d9; border-radius: 8px; padding: 12px; }
+.mapping-entry { display: flex; flex-wrap: wrap; gap: 12px; align-items: start; margin: 8px 0; }
+.mapping-entry textarea { min-width: 240px; min-height: 60px; }
