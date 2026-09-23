@@ -39,3 +39,8 @@ body { margin: 0; min-width: 760px; min-height: 100vh; }
 .mapping-field { border: 1px solid #d9d9d9; border-radius: 8px; padding: 12px; }
 .mapping-entry { display: flex; flex-wrap: wrap; gap: 12px; align-items: start; margin: 8px 0; }
 .mapping-entry textarea { min-width: 240px; min-height: 60px; }
+
+
+.runtime-manager {
+  width: 100%;
+}

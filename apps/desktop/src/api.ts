@@ -54,11 +54,11 @@ export async function fetchSnapshot(connection?: CoreConnection, signal?: AbortS
   return (await response.json()) as RuntimeSnapshot;
 }
 
-export async function setOutputsPaused(paused: boolean): Promise<void> {
+export async function setOutputsPaused(paused: boolean, connection?: CoreConnection): Promise<void> {
   const response = await coreFetch("/api/v1/admin/outputs/pause", {
     method: "POST",
     body: JSON.stringify({ paused }),
-  });
+  }, connection);
   if (!response.ok) throw new Error(`Core returned HTTP ${response.status}`);
 }
 

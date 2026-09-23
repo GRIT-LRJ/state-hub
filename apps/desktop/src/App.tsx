@@ -13,6 +13,7 @@ import { useTranslation } from "react-i18next";
 import { fetchSnapshot, getConnection, provisionCodexVirtual, publishConfig, setOutputsPaused, subscribe, type RuntimeSnapshot } from "./api.js";
 import { CoreConnectionLoop } from "./connection-loop.js";
 import { SourceManager } from "./SourceManager.js";
+import { RuntimeManager } from "./RuntimeManager.js";
 const ConfigManager = lazy(async () => await import("./ConfigManager.js").then((module) =>
   ({ default: module.ConfigManager })));
 import "./app.css";
@@ -23,6 +24,7 @@ export default function App() {
   const { t } = useTranslation();
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot>();
   const [error, setError] = useState<string>();
+  const [pauseError, setPauseError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showConfigManager, setShowConfigManager] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
@@ -58,9 +60,12 @@ export default function App() {
   const togglePause = async () => {
     if (!snapshot) return;
     setBusy(true);
+    setPauseError(false);
     try {
       await setOutputsPaused(!snapshot.outputsPaused);
       refresh();
+    } catch {
+      setPauseError(true);
     } finally {
       setBusy(false);
     }
@@ -112,6 +117,7 @@ export default function App() {
         </Header>
         <Content className="content">
           {error && <Alert type="warning" showIcon message={t("reconnecting")} description={error} />}
+          {pauseError && <Alert type="error" showIcon message={t("pauseFailed")} />}
           {snapshot?.outputsPaused && <Alert type="warning" showIcon message={t("paused")} />}
           {!snapshot?.claims.length && !snapshot?.projections.length && (
             <Alert
@@ -148,21 +154,7 @@ export default function App() {
               ]}
             />
           </Card>
-          <Card title={t("claims")} className="data-card">
-            <Table
-              rowKey={(row) => `${row.producerId}/${row.scopeId}/${row.signalId}`}
-              dataSource={snapshot?.claims ?? []}
-              pagination={{ pageSize: 20 }}
-              locale={{ emptyText: <Empty description={t("noClaims")} /> }}
-              columns={[
-                { title: t("producer"), dataIndex: "producerId" },
-                { title: t("scope"), dataIndex: "scopeId" },
-                { title: t("signal"), dataIndex: "signalId" },
-                { title: t("urgency"), dataIndex: "urgency", render: (value) => <Tag>{String(value ?? "ambient")}</Tag> },
-                { title: t("updatedAt"), dataIndex: "updatedAt", render: (value) => new Date(String(value)).toLocaleString() },
-              ]}
-            />
-          </Card>
+          <RuntimeManager claims={snapshot?.claims ?? []} disabled={!snapshot} onChanged={refresh} />
         </Content>
         <Footer className="footer"><SafetyCertificateOutlined /> {t("privacy")}</Footer>
       </Layout>
