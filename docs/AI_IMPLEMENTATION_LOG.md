@@ -726,3 +726,54 @@ PASS。
 ### Commit
 
 产品实现 `fe70d5e`。
+
+
+## Issue #20 — Codex spool-first 黑盒验收
+
+### 这张 Issue 要解决什么
+
+让 Codex hook 在 Core、网络或凭据库出故障时仍能快速返回，并把尚未送达的命令留在磁盘上；恢复后重复投递不能造成重复业务结果。多个 Codex 会话须保留各自状态，并按通用优先级竞争同一输出。
+
+### 原来有什么问题
+
+CLI 已先写临时文件再 rename，也有 800 毫秒请求超时，但几乎只测试命令解析。事件 ID 被拼进文件名，可影响磁盘路径；落盘未明确同步。异常正文可能把用户输入或凭据错误写入 hook 标准错误。无请求体的 SessionEnd clear 错带 JSON Content-Type，真实 Core 会拒绝，导致高优先级会话无法释放输出。Core 故障、并发 drain 和多会话行为没有进程级验收。
+
+### 我改了什么
+
+spool 文件名改为内部时间和随机 ID，与 event ID 等命令字段分离；写入后先同步文件，再原子 rename，支持的平台同步目录。CLI 只连接 discovery 声明的 127.0.0.1 有效端口，发送前先落盘；成功收到 Core 的 202 后删除 spool，失败则保留。没有请求体的 clear 不发送 JSON Content-Type。hook 的 stdin 读取有时间及大小上限，CLI 和 hook 的错误输出改为固定安全类别，始终以成功退出让 Codex 继续运行。
+
+### 为什么这样改
+
+spool 是故障恢复的原始命令凭据，必须先完整落盘；磁盘路径不能由生产者数据决定。Core 的幂等命令 ID 留在文件内容中，使并发和崩溃后的重复发送指向同一个业务命令。只接受 loopback discovery 可防止错误连接信息把 producer token 发往远端。无请求体命令应遵守 Core 的 HTTP 解析规则，才能真正清除会话。
+
+### 哪些文件发生变化
+
+事件 CLI 的 `main.ts`、`codex-hook.ts`、包测试脚本及黑盒测试和崩溃/凭据故障预加载器；真实 Core 的 `codex-spool.acceptance.test.ts`；根目录验收脚本会先构建 CLI。
+
+### 数据库是否变化
+
+没有 schema、migration 或 backfill。重复 drain 使用现有的持久命令和 event 防重记录；没有新增数据库状态。
+
+### 外部行为是否变化
+
+Codex hook 对无效输入、Core 离线、凭据库失败和请求超时仍成功退出。未送达命令保留在 spool；SessionEnd 现在可正常清除 claim，输出自动回落到仍有效的会话。原子 spool 文件名不再暴露事件 ID。安装说明继续要求把示例 hook 合并到用户配置，没有覆盖用户 hook 的安装步骤。
+
+### 风险
+
+spool 中仍保存未送达的原始业务命令，应由当前用户的应用数据目录和文件权限保护；长期无法连接时需要运行 drain，待送达文件会持续存在。Windows 上使用原子 rename 和文件同步；目录同步只在支持的平台执行。构建仍提示桌面前端产物较大，留给容量/性能验收评估。
+
+### 测试
+
+进程级 CLI 测试直接模拟 rename 前后崩溃和部分文件、凭据库异常、错误 discovery、未结束的 stdin、非法输入，以及无响应 loopback 服务的 800 毫秒超时。真实 Core 验收先杀死 Core，再由 hook 写入第二个会话并重启 drain；管理快照验证两个 session 独立、优先级获胜以及 SessionEnd 后回退。另以真实 HTTP 服务统计并发 drain、同一文件重复投递和 Core 重启后重复投递的外部请求次数，始终为一次。最终 `pnpm test`、`pnpm test:acceptance`、`pnpm check`、`pnpm build` 四项门禁全部通过。
+
+### Reviewer 曾发现的问题
+
+第一次真实 Core 验收发现 SessionEnd 留在 spool：CLI 给空请求加了 JSON Content-Type，现只在有请求体时加。安全审查发现 event ID 和命令时间可影响文件名，现完全改由内部生成；发现原始异常可能含用户文本或凭据，现只打印固定错误码；发现 discovery 地址未限定 loopback，现先检查地址再读取 token。崩溃窗口检查确认部分临时文件不会被 drain，Core 接受但本地尚未删文件时的重试沿用稳定幂等身份。最终 Critical 0、High 0；Spec PASS、Correctness architecture PASS、Security PASS、Crash/Recovery PASS；Can commit YES。
+
+### 最终状态
+
+PASS。
+
+### Commit
+
+产品实现 `0e4b0cc`。

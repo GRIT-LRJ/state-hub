@@ -23,7 +23,7 @@
 | #17 来源与 PushPlus 管理 | PASS | High | 无 / #2、#16 | 来源 Token、OS 凭据引用、PushPlus UI 与业务码 | 已完成 | 四项门禁；Rust 5/5 PASS | Spec/Correctness/Security/Recovery PASS | 735c148 |
 | #18 驱动与配置管理 UI | PASS | High | #10 / #2、#16 | 宿主 Schema 表单、Binding、草案/版本/回滚、旧草案并发保护 | 已完成 | 四项门禁 PASS | Spec/Correctness/Security/Recovery PASS | 7d6734c |
 | #19 暂停、确认与诊断 UI | PASS | High | #7、#14 / #2、#16 | claim revision 确认、暂停恢复、支持包预览/导出 | 已完成 | 四项门禁；Rust 6/6 PASS | Spec/Correctness/Security/Recovery PASS | fe70d5e |
-| #20 Codex spool 验收 | TODO | High | 无 / #2、#8、#9 | hook、spool、drain 黑盒验收 | 是 | 待运行 | 待审查 | — |
+| #20 Codex spool 验收 | PASS | High | 无 / #2、#8、#9 | 原子 spool、fail-open、并发 drain、多会话真实 Core 验收 | 已完成 | 四项门禁 PASS；CLI 黑盒及真实 Core HTTP 计数 PASS | Spec/Correctness/Security/Recovery PASS | 0e4b0cc |
 | #21 VK87 契约验收 | TODO | High | 无 / #2 | fake HID、选择器、65 字节 profile | 是 | 待运行 | 待审查 | — |
 | #22 容量与延迟验收 | TODO | Medium | #2、#8、#9、#10、#12、#13、#15 / 无 | 真实 Core 压测 | 是 | 待运行 | 待审查 | — |
 | #23 Packaging 与 Updater | TODO | High | 无 / #2、#16、#17、#18、#19、#22 | 三平台安装与升级 smoke | 是，基础设施可先做 | 待运行 | 待审查 | — |
