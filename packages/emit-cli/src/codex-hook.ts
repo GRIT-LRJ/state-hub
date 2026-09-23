@@ -11,8 +11,19 @@ interface CodexHookPayload {
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
-  return Buffer.concat(chunks).toString("utf8");
+  let size = 0;
+  const timeout = setTimeout(() => process.stdin.destroy(new Error("HOOK_INPUT_TIMEOUT")), 800);
+  try {
+    for await (const chunk of process.stdin) {
+      const bytes = Buffer.from(chunk);
+      size += bytes.length;
+      if (size > 1_000_000) throw new Error("HOOK_INPUT_TOO_LARGE");
+      chunks.push(bytes);
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function commandFor(payload: CodexHookPayload): ReturnType<typeof parseCommand> | undefined {
@@ -73,7 +84,7 @@ async function main(): Promise<void> {
   if (command && command !== "drain") await emitFailOpen(command);
 }
 
-void main().catch((error) => {
-  process.stderr.write(`state-hub-codex-hook: ${error instanceof Error ? error.message : String(error)}\n`);
+void main().catch(() => {
+  process.stderr.write("state-hub-codex-hook: HOOK_FAILED\n");
   process.exitCode = 0;
 });

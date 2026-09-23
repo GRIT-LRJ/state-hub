@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync,
+  renameSync, unlinkSync, writeFileSync,
+} from "node:fs";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { AsyncEntry } from "@napi-rs/keyring";
@@ -69,14 +72,26 @@ export function parseCommand(args: string[]): SpoolCommand | "drain" {
 
 export function spool(command: SpoolCommand, directory: string): string {
   mkdirSync(directory, { recursive: true });
-  const target = join(directory, `${command.createdAt.replaceAll(":", "-")}-${command.id}.json`);
-  const temporary = `${target}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(command)}\n`, { encoding: "utf8", mode: 0o600 });
+  // The disk name never includes producer-controlled event IDs or path separators.
+  const target = join(directory, `${new Date().toISOString().replaceAll(":", "-")}-${randomUUID()}.json`);
+  const temporary = `${target}.tmp`;
+  const file = openSync(temporary, "wx", 0o600);
+  try {
+    writeFileSync(file, `${JSON.stringify(command)}\n`, { encoding: "utf8" });
+    fsyncSync(file);
+  } finally {
+    closeSync(file);
+  }
   renameSync(temporary, target);
   try {
     chmodSync(target, 0o600);
   } catch {
     // Windows relies on the per-user application data ACL.
+  }
+  if (process.platform !== "win32") {
+    const parent = openSync(directory, "r");
+    try { fsyncSync(parent); }
+    finally { closeSync(parent); }
   }
   return target;
 }
@@ -84,6 +99,10 @@ export function spool(command: SpoolCommand, directory: string): string {
 async function send(spoolPath: string, paths: ReturnType<typeof cliPaths>): Promise<boolean> {
   const command = JSON.parse(readFileSync(spoolPath, "utf8")) as SpoolCommand;
   const discovery = JSON.parse(readFileSync(paths.discovery, "utf8")) as { host: string; port: number };
+  if (discovery.host !== "127.0.0.1" || !Number.isInteger(discovery.port) ||
+    discovery.port < 1 || discovery.port > 65535) {
+    throw new Error("INVALID_DISCOVERY");
+  }
   const token =
     process.env.STATE_HUB_PRODUCER_TOKEN ??
     (await new AsyncEntry("dev.statehub.desktop", `producer:${command.producerId}`).getPassword(AbortSignal.timeout(500)));
@@ -92,7 +111,7 @@ async function send(spoolPath: string, paths: ReturnType<typeof cliPaths>): Prom
     method: command.method,
     headers: {
       authorization: `Bearer ${token}`,
-      "content-type": "application/json",
+      ...(command.body === undefined ? {} : { "content-type": "application/json" }),
       "idempotency-key": command.id,
     },
     ...(command.body === undefined ? {} : { body: JSON.stringify(command.body) }),
@@ -138,7 +157,7 @@ export async function emitFailOpen(command: SpoolCommand, paths = cliPaths()): P
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   void main().catch((error) => {
-    process.stderr.write(`state-hub-emit: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write("state-hub-emit: EMIT_FAILED\n");
     // Codex and automation hooks must never be blocked by State Hub availability.
     process.exitCode = 0;
   });
