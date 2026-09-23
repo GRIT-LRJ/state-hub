@@ -25,7 +25,7 @@
 | #19 暂停、确认与诊断 UI | PASS | High | #7、#14 / #2、#16 | claim revision 确认、暂停恢复、支持包预览/导出 | 已完成 | 四项门禁；Rust 6/6 PASS | Spec/Correctness/Security/Recovery PASS | fe70d5e |
 | #20 Codex spool 验收 | PASS | High | 无 / #2、#8、#9 | 原子 spool、fail-open、并发 drain、多会话真实 Core 验收 | 已完成 | 四项门禁 PASS；CLI 黑盒及真实 Core HTTP 计数 PASS | Spec/Correctness/Security/Recovery PASS | 0e4b0cc |
 | #21 VK87 契约验收 | PASS | High | 无 / #2 | fake HID、唯一接口与 65 字节、真实 Core 无硬件验收、人工 opt-in | 已完成 | 四项门禁 PASS；fake HID 与真实 Core PASS | Spec/Correctness/Security/Recovery PASS；运行器偶发 IPC 记为 Medium | 470b30e |
-| #22 容量与延迟验收 | TODO | Medium | #2、#8、#9、#10、#12、#13、#15 / 无 | 真实 Core 压测 | 是 | 待运行 | 待审查 | — |
+| #22 容量与延迟验收 | PASS | Medium | #2、#8、#9、#10、#12、#13、#15 / 无 | 50 来源/输出、500 绑定、真实 HTTP/SQLite/dispatcher、P95 报告 | 已完成 | 四项门禁与 test:performance PASS | Spec/Correctness/Security/Recovery/Integration PASS | c934ba5 |
 | #23 Packaging 与 Updater | TODO | High | 无 / #2、#16、#17、#18、#19、#22 | 三平台安装与升级 smoke | 是，基础设施可先做 | 待运行 | 待审查 | — |
 | #24 Stable 发布门禁 | TODO | High | #23 / #3–#22 | 签名、公证、provenance、stable gate | 否，等待 #23 | 待运行 | 待审查 | — |
 

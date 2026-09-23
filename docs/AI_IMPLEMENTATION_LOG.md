@@ -828,3 +828,54 @@ PASS。
 ### Commit
 
 产品实现 `470b30e`。
+
+
+## Issue #22 — 真实 Core 容量与延迟验收
+
+### 这张 Issue 要解决什么
+
+证明平台在桌面规模下仍能及时接收事件：50 个来源、50 个输出和 500 条绑定同时存在时，持续 100 events/s、1000 条突发及 Core 重启后的输入都能完成，HTTP 接受延迟的 P95 不超过 100 毫秒。
+
+### 原来有什么问题
+
+原有性能测试只在同一进程内调用 Service，使用内存 SQLite，没有经过真实 loopback HTTP、磁盘数据库、配置发布或异步 dispatcher。它无法说明桌面实际使用时的输入延迟，也无法发现高绑定基数下每次事件重复读取和解析全部绑定的成本。
+
+### 我改了什么
+
+新增独立的 `pnpm test:performance` 负载门禁。它启动真实 Core 和临时 SQLite，注册 50 个来源，发布 50 个虚拟驱动实例与 500 条绑定；先暖机，再按每 10 毫秒一条的节奏提交 500 条事件，接着以最多 64 个在途 HTTP 请求提交准确的 1000 条突发事件，强杀并重启 Core 后再提交 100 条。脚本检查所有 1650 次虚拟投递完成、无死信，输出机器环境、P50/P95/P99、速率、配置发布时间、待处理数和 dispatcher 排空时间。Core 对已发布绑定按配置 revision 缓存解析结果，配置变化时重新读取。
+
+### 为什么这样改
+
+HTTP 202 是命令事务已提交的可观察边界，直接从客户端计时才能覆盖网络、Fastify 和 SQLite；等待全部 delivery 结束又能证明 dispatcher 在负载后恢复到空队列。绑定内容只随配置 revision 改变，按 revision 缓存避免每次事件重新解析 500 条 JSON，而不改变数据库事实源。突发使用固定 64 个在途连接，避免把本机 TCP backlog 当成平台吞吐，并在报告中公开这个负载参数。
+
+### 哪些文件发生变化
+
+Core 的 `service.ts`、`scripts/performance-benchmark.mjs` 和包脚本；根目录新增 `test:performance` 命令；`docs/OPERATIONS.md` 写明负载形状、阈值和发布环境要求。
+
+### 数据库是否变化
+
+没有 schema、migration 或 backfill。基准使用真实 WAL 数据库；绑定缓存只在 Core 进程内，重启后从 SQLite 重建。投递、命令和防重身份沿用原有表。
+
+### 外部行为是否变化
+
+HTTP/API 形状不变。大量绑定下事件接受更快；新配置发布、回滚和插件升级仍以新 revision 为准。开发和发布人员可运行独立性能命令并保存结构化结果。
+
+### 风险
+
+绝对延迟受主机 CPU、内存、Node 版本和后台负载影响。当前 Windows x64、Node 24.15.0、i7-13700H、约 16 GB 内存的连续有效结果均通过；正式 CI/发布须在固定、空闲机器上重复运行。突发 P95 针对开始发送 HTTP 请求到收到 202 的时间，64 个连接之外的客户端排队时间不计入单请求延迟；批次总耗时另行报告。缓存依赖配置 revision，已由配置发布、回滚、插件升级及崩溃恢复验收复核。
+
+### 测试
+
+最后一轮：50 来源、50 输出、500 绑定；持续 500 条用 4.999 秒完成，接受速率 100.02 events/s、P95 4.41 毫秒；1000 条突发 P95 83.57 毫秒、总耗时 1.292 秒；强杀重启后 100 条 P95 30.22 毫秒。总计 1650 条 delivery 全部完成、死信零。每阶段都检查 HTTP 状态，持续、突发和恢复的 P95 都以 100 毫秒为硬阈值。最终 `pnpm test`、`pnpm test:acceptance`、`pnpm check`、`pnpm build` 和 `pnpm test:performance` 均通过。
+
+### Reviewer 曾发现的问题
+
+最初同时建立 1000 个 TCP 连接时 Windows 拒绝部分连接，但 Core 仍运行；负载器改为公开的 64 在途连接突发模型。另一轮超时来自测试器最后一批多发 24 条，Core 实际全部投递；现末批按剩余数量发送，并在失败时报告 delivery 状态。Review 还发现按 producer 再建一层绑定索引没有改善本机结果，已撤回，只保留直接解决重复 JSON 解析的 revision 缓存。缓存失效路径及 #20–#22 的配置、投递、恢复、安全组合审查均通过。最终 Critical 0、High 0；Spec PASS、Correctness architecture PASS、Security PASS、Crash/Recovery PASS；Can commit YES。
+
+### 最终状态
+
+PASS。
+
+### Commit
+
+产品实现 `c934ba5`。
