@@ -6,6 +6,9 @@ authors = ["State Hub contributors"]
 license = "MIT"
 edition = "2021"
 
+[features]
+lifecycle-smoke = []
+
 [lib]
 name = "state_hub_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

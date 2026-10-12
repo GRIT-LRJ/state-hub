@@ -118,6 +118,8 @@ async fn supervise(app: AppHandle) {
                     break;
                 }
                 let pid = child.pid();
+                #[cfg(feature = "lifecycle-smoke")]
+                crate::lifecycle_smoke::record_spawn(&app, generation, pid);
                 match state.child.lock() {
                     Ok(mut slot) => *slot = Some(child),
                     Err(_) => {
@@ -218,6 +220,16 @@ async fn supervise(app: AppHandle) {
             }
         }
     }
+}
+
+#[cfg(feature = "lifecycle-smoke")]
+pub(crate) fn crash_for_smoke(app: &AppHandle) {
+    let state = app.state::<CoreState>();
+    if let Ok(mut slot) = state.child.lock() {
+        if let Some(child) = slot.take() {
+            let _ = child.kill();
+        }
+    };
 }
 
 #[cfg(test)]

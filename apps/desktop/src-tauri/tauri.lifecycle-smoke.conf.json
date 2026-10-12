@@ -1,0 +1,5 @@
+{
+  "identifier": "dev.statehub.lifecycle-smoke",
+  "app": { "windows": [{ "label": "main", "visible": false }] },
+  "bundle": { "active": false }
+}

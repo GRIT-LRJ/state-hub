@@ -1,4 +1,6 @@
 mod credentials;
+mod lifecycle_smoke;
+mod updater_config;
 mod supervisor;
 mod support_bundle;
 
@@ -73,7 +75,6 @@ pub fn run() {
         .manage(CoreState::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_autostart::Builder::new().build())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("main") {
@@ -83,13 +84,19 @@ pub fn run() {
         }))
         .invoke_handler(tauri::generate_handler![
             supervisor::core_connection,
+            lifecycle_smoke::record_connection,
             credentials::store_secret,
             credentials::secret_status,
             credentials::delete_secret,
             support_bundle::save_support_bundle
         ])
         .setup(|app| {
+            if updater_config::configured(app.config().plugins.0.get("updater")) {
+                app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
             create_tray(app)?;
+            #[cfg(feature = "lifecycle-smoke")]
+            lifecycle_smoke::start(app.handle().clone());
             start_supervisor(app.handle().clone());
             Ok(())
         })

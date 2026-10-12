@@ -124,6 +124,7 @@ export async function subscribe(connection: CoreConnection, onChange: () => void
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let reportedConnection = false;
   try {
     while (!signal.aborted) {
       const { value, done } = await reader.read();
@@ -135,7 +136,13 @@ export async function subscribe(connection: CoreConnection, onChange: () => void
         buffer = buffer.slice(boundary + 2);
         const type = frame.split("\n").find((line) => line.startsWith("event:"))?.slice(6).trim();
         // The initial Core snapshot frame closes the fetch-to-subscribe race; its body is not UI state.
-        if (type) onChange();
+        if (type) {
+          onChange();
+          if (!reportedConnection && import.meta.env?.VITE_STATE_HUB_LIFECYCLE_SMOKE === "1") {
+            reportedConnection = true;
+            void invoke("record_connection", { generation: connection.generation }).catch(() => undefined);
+          }
+        }
         boundary = buffer.indexOf("\n\n");
       }
       if (buffer.length > 65_536) throw new Error("SSE_FRAME_TOO_LARGE");

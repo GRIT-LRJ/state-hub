@@ -20,9 +20,7 @@ const triples = {
 const triple = process.env.STATE_HUB_TARGET_TRIPLE ?? triples[`${platformName}-${architecture}`];
 if (!triple) throw new Error(`Unsupported sidecar target: ${platformName}-${architecture}`);
 
-runPnpm(["--filter", "@state-hub/protocol", "build"]);
-runPnpm(["--filter", "@state-hub/domain", "build"]);
-runPnpm(["--filter", "@state-hub/sdk", "build"]);
+runPnpm(["build:packages"]);
 runPnpm(["--filter", "@state-hub/core", "build"]);
 
 const extension = process.platform === "win32" ? ".exe" : "";

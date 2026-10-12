@@ -21,3 +21,23 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
       - run: pnpm test:performance
+  desktop-lifecycle:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:sidecar
+      - run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --features lifecycle-smoke
+      - run: pnpm --filter @state-hub/desktop tauri build --no-bundle --features lifecycle-smoke --config src-tauri/tauri.lifecycle-smoke.conf.json
+        env:
+          VITE_STATE_HUB_LIFECYCLE_SMOKE: '1'
+      - run: node tools/desktop-lifecycle-smoke.mjs apps/desktop/src-tauri/target/release/state-hub-desktop.exe

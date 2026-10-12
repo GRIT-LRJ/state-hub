@@ -7,7 +7,10 @@
   "bin": "./dist/main.js",
   "pkg": {
     "assets": [
-      "../../node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+      "../../node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
+      "../../packages/plugin-kit/node_modules/fflate/lib/*.cjs",
+      "../../packages/plugin-kit/node_modules/fflate/esm/*.mjs",
+      "../../packages/plugin-kit/node_modules/fflate/package.json"
     ]
   },
   "scripts": {

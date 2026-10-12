@@ -15,5 +15,4 @@ target/
 .pkg-cache/
 state-hub-core-*.exe
 apps/desktop/src-tauri/gen/
-apps/desktop/src-tauri/icons/
 apps/desktop/src-tauri/binaries/

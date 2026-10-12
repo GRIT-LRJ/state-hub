@@ -42,9 +42,33 @@ const idParamsSchema = {
   },
 } as const;
 
+const desktopOrigins = new Set(["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"]);
+
 export function createServer(options: ServerOptions): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: 1_048_576, trustProxy: false });
   const plugins = options.plugins ?? new PluginRepository(options.service.db);
+  // Browser preflights have no bearer token. They permit transport only; every
+  // actual admin request still passes adminAuth. Producer APIs remain non-browser.
+  app.addHook("onRequest", async (request, reply) => {
+    const origin = request.headers.origin;
+    if (origin && desktopOrigins.has(origin) && request.url.startsWith("/api/v1/admin/")) {
+      reply.header("access-control-allow-origin", origin);
+      reply.header("vary", "Origin");
+    }
+  });
+  app.options("/api/v1/admin/*", async (request, reply) => {
+    const origin = request.headers.origin;
+    const method = request.headers["access-control-request-method"];
+    const headers = request.headers["access-control-request-headers"];
+    const allowedHeaders = typeof headers === "string" ? headers.toLowerCase().split(",").map((value) => value.trim()) : [];
+    if (!origin || !desktopOrigins.has(origin) || typeof method !== "string" ||
+      !["GET", "POST", "DELETE"].includes(method) ||
+      allowedHeaders.some((value) => !["authorization", "content-type"].includes(value))) {
+      return await reply.code(403).send({ error: { code: "PREFLIGHT_FORBIDDEN", message: "Desktop preflight is not permitted" } });
+    }
+    return await reply.header("access-control-allow-methods", "GET, POST, DELETE")
+      .header("access-control-allow-headers", "authorization, content-type").code(204).send();
+  });
   app.addContentTypeParser("application/vnd.statehub.plugin", { parseAs: "buffer" }, (_request, body, done) => {
     done(null, body);
   });
@@ -100,7 +124,7 @@ export function createServer(options: ServerOptions): FastifyInstance {
 
   const adminAuth = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const origin = request.headers.origin;
-    if (origin && origin !== "tauri://localhost" && origin !== "http://tauri.localhost" && origin !== "https://tauri.localhost") {
+    if (origin && !desktopOrigins.has(origin)) {
       await reply.code(403).send({ error: { code: "ORIGIN_FORBIDDEN", message: "Admin API only accepts the Tauri origin" } });
       return;
     }
@@ -570,6 +594,9 @@ export function createServer(options: ServerOptions): FastifyInstance {
 
   app.get("/api/v1/admin/events", { preHandler: adminAuth }, async (request, reply) => {
     reply.hijack();
+    for (const [name, value] of Object.entries(reply.getHeaders())) {
+      if (value !== undefined) reply.raw.setHeader(name, value);
+    }
     reply.raw.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache, no-transform",
