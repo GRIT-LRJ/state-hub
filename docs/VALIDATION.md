@@ -1,0 +1,35 @@
+# 提交与结案验证
+
+## 验证哪个版本
+
+工作树测试只证明当前工作树，不能证明其中一部分提交或某个旧 HEAD。
+
+提交前显式暂存本次修改，然后运行：
+
+```sh
+node tools/verify-candidate.mjs
+```
+
+该命令导出 Git index 的完整 tree 到新的临时目录，按锁文件安装依赖，依次运行 `pnpm test`、`pnpm test:acceptance`、`pnpm check`、`pnpm build`。不复制原工作树的依赖或编译产物。输出的 `evidence.json` 记录 tree、父提交、锁文件摘要、环境、逐项退出码及日志位置；任何失败都不会标为 PASS。临时目录保留供调查。
+
+commit 后用 `git rev-parse HEAD^{tree}` 与 evidence 的 tree 核对。二者相同才可把这份测试证据归属于该提交。之后更改 index 或代码需要重新验证；仅有提交信息不同不会改变 tree。
+
+CI 的 `verify.yml` 在 push 和 pull request 上从 checkout 运行基础门禁和容量验收。CI 通过不能替代本地未覆盖的原生桌面、签名或跨平台发行验收。
+
+## 验证哪些行为
+
+每个 Issue 的结案记录必须把 acceptance criterion 对应到实际测试和可观察断言。至少区分：
+
+- 单元逻辑：例如退避上限、状态仲裁、脱敏规则。
+- 真实 Core：通过 HTTP 请求、持久数据库和真实进程验证接受、恢复及投递。
+- 真实桌面：启动 Tauri 可执行文件，验证其自动监督 Core、界面重连及退出回收。测试中手动重启 Core 只证明客户端重连，不能代替监督验收。
+- 容量：事件路径与状态投影路径分别测量，不能用 append-only 成绩代表仲裁路径。
+- 发行：已安装程序、平台、签名、升级和启动性能分别有证据，不能用前端 Vite build 代替。
+
+四项基础门禁全部通过只是必要条件。Spec、Correctness architecture、Security 和 Crash/recovery review 必须说明检查范围；没有执行或没有覆盖的条件保持未通过。
+
+## 发现历史 PASS 的阻断
+
+保留旧提交和历史证据，在 `ISSUE_PROGRESS.md` 撤回受影响 Issue 的当前 PASS，指出哪个验收条件失效。把所需正确性修复作为独立提交完成，避免藏在尚未完成的打包或发布工作树中。修复后重新验证受影响链路，再恢复结案状态。
+
+推送和关闭 Issue 是两个动作：推送已验证提交不表示所有 Issue 完成；关闭必须满足该 Issue 的全部验收依赖。施工日志记录修复行为、曾发现的问题和实际证据，不用测试数量替代规格覆盖。
