@@ -82,6 +82,29 @@ describe("StateHub vertical slice", () => {
     expect(service.snapshot().pendingDeliveries).toBe(0);
   });
 
+  it("retains competitors and producer-independent bindings when an input recomputes shared resources", () => {
+    registerProducer(db, "other", producerToken);
+    const draft = service.createConfigDraft({
+      driverInstances: [{ id: "virtual-main", driverType: "virtual", enabled: true, config: {} }],
+      bindings: [statefulBinding,
+        { ...statefulBinding, id: "other", selector: { producerId: "other", signalId: "status" } },
+        { ...statefulBinding, id: "all", selector: { signalId: "status" },
+          target: { ...statefulBinding.target, resourceChannel: "all-producers" } }],
+    });
+    service.publishConfig(draft.revision);
+    service.upsertClaim("codex", producerToken, "session", "status", { value: { color: "red" }, urgency: "critical" });
+    const original = service.listProjections().map((projection) => projection.revision);
+    service.upsertClaim("other", producerToken, "session", "status", { value: { color: "blue" }, urgency: "informational" });
+    expect(service.listProjections().map((projection) => projection.action?.params.color)).toEqual(["red", "red"]);
+    expect(service.listProjections().map((projection) => projection.revision)).toEqual(original);
+    service.upsertClaim("codex", producerToken, "session", "status", { value: { color: "green" }, urgency: "ambient" });
+    expect(service.listProjections().map((projection) => projection.action?.params.color)).toEqual(["blue", "blue"]);
+    service.clearClaim("other", producerToken, "session", "status");
+    expect(service.listProjections().map((projection) => projection.action?.params.color)).toEqual(["green", "green"]);
+    service.clearClaim("codex", producerToken, "session", "status");
+    expect(service.listProjections().map((projection) => projection.action)).toEqual([null, null]);
+  });
+
   it("keeps an append-only target installed until its pending delivery settles", async () => {
     service.upsertClaim("codex", producerToken, "session-1", "status", {
       value: { phase: "decision", color: "amber" },

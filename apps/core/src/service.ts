@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type Database from "better-sqlite3";
 import type {
   AcceptedCommand,
   ActionCandidate,
@@ -196,7 +197,45 @@ function plusMilliseconds(iso: string, milliseconds: number): string {
 
 export class StateHubService {
   readonly maxScopesPerProducer = 100;
+  readonly #statements = new Map<string, Database.Statement<unknown[]>>();
+
+  private prepare(sql: string): Database.Statement<unknown[]> {
+    const existing = this.#statements.get(sql);
+    if (existing) return existing;
+    const statement = this.db.raw.prepare(sql);
+    if (this.#statements.size >= 256) this.#statements.delete(this.#statements.keys().next().value!);
+    this.#statements.set(sql, statement);
+    return statement;
+  }
+
   #bindingsCache: { revision: number | null; bindings: Binding[] } | undefined;
+  #statefulIndex: { source: Binding[]; byResource: Map<string, Binding[]>;
+    resourcesByProducer: Map<string | undefined, Set<string>> } | undefined;
+
+  private statefulBindings(changedProducer?: string): { bindings: Binding[]; affected?: Set<string> } {
+    const source = this.listBindings();
+    if (this.#statefulIndex?.source !== source) {
+      const byResource = new Map<string, Binding[]>();
+      const resourcesByProducer = new Map<string | undefined, Set<string>>();
+      for (const binding of source) {
+        if (binding.target.actionKind !== "stateful") continue;
+        const resource = resourceKey(binding.target.driverInstanceId, binding.target.resourceChannel);
+        const group = byResource.get(resource) ?? [];
+        group.push(binding);
+        byResource.set(resource, group);
+        const producer = binding.selector.producerId || undefined;
+        const resources = resourcesByProducer.get(producer) ?? new Set<string>();
+        resources.add(resource);
+        resourcesByProducer.set(producer, resources);
+      }
+      this.#statefulIndex = { source, byResource, resourcesByProducer };
+    }
+    const { byResource, resourcesByProducer } = this.#statefulIndex;
+    if (changedProducer === undefined) return { bindings: [...byResource.values()].flat() };
+    const affected = new Set([...(resourcesByProducer.get(undefined) ?? []),
+      ...(resourcesByProducer.get(changedProducer) ?? [])]);
+    return { affected, bindings: [...affected].flatMap((resource) => byResource.get(resource) ?? []) };
+  }
 
   constructor(
     readonly db: StateHubDatabase,
@@ -205,17 +244,17 @@ export class StateHubService {
   ) {}
 
   isPaused(): boolean {
-    const row = this.db.raw.prepare("SELECT value_json FROM settings WHERE key = 'outputsPaused'").get() as {
+    const row = this.prepare("SELECT value_json FROM settings WHERE key = 'outputsPaused'").get() as {
       value_json: string;
     };
     return JSON.parse(row.value_json) as boolean;
   }
 
   listBindings(): Binding[] {
-    const revision = (this.db.raw.prepare("SELECT MAX(config_revision) AS revision FROM bindings")
+    const revision = (this.prepare("SELECT MAX(config_revision) AS revision FROM bindings")
       .get() as { revision: number | null }).revision;
     if (this.#bindingsCache?.revision === revision) return this.#bindingsCache.bindings;
-    const bindings = (this.db.raw.prepare("SELECT payload_json FROM bindings ORDER BY id").all() as BindingRow[]).map(
+    const bindings = (this.prepare("SELECT payload_json FROM bindings ORDER BY id").all() as BindingRow[]).map(
       (row) => JSON.parse(row.payload_json) as Binding,
     );
     this.#bindingsCache = { revision, bindings };
@@ -223,20 +262,19 @@ export class StateHubService {
   }
 
   listClaims(): StateClaim[] {
-    return (this.db.raw.prepare("SELECT * FROM claims ORDER BY producer_id, scope_id, signal_id").all() as ClaimRow[]).map(
+    return (this.prepare("SELECT * FROM claims ORDER BY producer_id, scope_id, signal_id").all() as ClaimRow[]).map(
       decodeClaim,
     );
   }
 
   listProjections(): Projection[] {
-    return (this.db.raw.prepare("SELECT * FROM projections ORDER BY resource_key").all() as ProjectionRow[]).map(
+    return (this.prepare("SELECT * FROM projections ORDER BY resource_key").all() as ProjectionRow[]).map(
       decodeProjection,
     );
   }
 
   listPendingClaimExpirations(): PendingClaimExpiration[] {
-    const rows = this.db.raw
-      .prepare(
+    const rows = this.prepare(
         `SELECT c.producer_id, c.scope_id, c.signal_id, c.revision, c.expires_at
          FROM claims c
          LEFT JOIN claim_expirations e
@@ -272,8 +310,7 @@ export class StateHubService {
     this.db.transaction(() => {
       revision = this.db.nextRevision();
       for (const expiration of due) {
-        this.db.raw
-          .prepare(
+        this.prepare(
             `INSERT OR IGNORE INTO claim_expirations(
                producer_id, scope_id, signal_id, claim_revision, expires_at, applied_at
              ) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -306,10 +343,9 @@ export class StateHubService {
   }
 
   snapshot(): RuntimeSnapshot {
-    const pending = this.db.raw
-      .prepare("SELECT count(*) AS count FROM deliveries WHERE status IN ('pending', 'leased')")
+    const pending = this.prepare("SELECT count(*) AS count FROM deliveries WHERE status IN ('pending', 'leased')")
       .get() as { count: number };
-    const dead = this.db.raw.prepare("SELECT count(*) AS count FROM deliveries WHERE status = 'dead-letter'").get() as {
+    const dead = this.prepare("SELECT count(*) AS count FROM deliveries WHERE status = 'dead-letter'").get() as {
       count: number;
     };
     return {
@@ -323,11 +359,10 @@ export class StateHubService {
   }
 
   getCommand(producerId: string, commandId: string): CommandResult | undefined {
-    const row = this.db.raw
-      .prepare("SELECT * FROM commands WHERE id = ? AND producer_id = ?")
+    const row = this.prepare("SELECT * FROM commands WHERE id = ? AND producer_id = ?")
       .get(commandId, producerId) as CommandRow | undefined;
     if (!row) {
-      const identity = this.db.raw.prepare(
+      const identity = this.prepare(
         `SELECT command_id, kind, status, accepted_at, completed_at FROM command_dedupe
          WHERE command_id = ? AND producer_id = ?`,
       ).get(commandId, producerId) as {
@@ -379,11 +414,9 @@ export class StateHubService {
       },
       (commandId, revision, now) => {
         this.touchScope(producerId, scopeId, input.sourceType, now);
-        this.db.raw
-          .prepare("DELETE FROM claim_expirations WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
+        this.prepare("DELETE FROM claim_expirations WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
           .run(producerId, scopeId, signalId);
-        this.db.raw
-          .prepare(
+        this.prepare(
             `INSERT INTO claims(
                producer_id, scope_id, signal_id, source_type, value_json, urgency, expires_at,
                stale_policy, observed_at, metadata_json, revision, updated_at
@@ -410,12 +443,11 @@ export class StateHubService {
             now,
           );
         const claim = decodeClaim(
-          this.db.raw
-            .prepare("SELECT * FROM claims WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
+          this.prepare("SELECT * FROM claims WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
             .get(producerId, scopeId, signalId) as ClaimRow,
         );
         this.enqueueClaimEffects(commandId, claim, now);
-        this.recomputeStateful(commandId, now);
+        this.recomputeStateful(commandId, now, producerId);
         this.appendHistory("claim.upsert", claimKey(producerId, scopeId, signalId), { revision }, now);
       },
     );
@@ -437,13 +469,11 @@ export class StateHubService {
       undefined,
       (commandId, revision, now) => {
         const key = claimKey(producerId, scopeId, signalId);
-        this.db.raw
-          .prepare("DELETE FROM claims WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
+        this.prepare("DELETE FROM claims WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
           .run(producerId, scopeId, signalId);
-        this.db.raw
-          .prepare("DELETE FROM claim_expirations WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
+        this.prepare("DELETE FROM claim_expirations WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
           .run(producerId, scopeId, signalId);
-        this.db.raw.prepare("DELETE FROM binding_transitions WHERE input_key = ?").run(key);
+        this.prepare("DELETE FROM binding_transitions WHERE input_key = ?").run(key);
         this.recomputeStateful(commandId, now);
         this.appendHistory("claim.clear", key, { revision }, now);
       },
@@ -468,16 +498,14 @@ export class StateHubService {
       },
       (commandId, revision, now) => {
         const eventIdHash = dedupeIdentityHash(input.eventId);
-        const duplicate = this.db.raw
-          .prepare("SELECT 1 FROM event_dedupe WHERE producer_id = ? AND event_id_hash = ?")
+        const duplicate = this.prepare("SELECT 1 FROM event_dedupe WHERE producer_id = ? AND event_id_hash = ?")
           .get(producerId, eventIdHash);
         if (duplicate) return;
-        this.db.raw.prepare("INSERT INTO event_dedupe(producer_id, event_id_hash) VALUES (?, ?)")
+        this.prepare("INSERT INTO event_dedupe(producer_id, event_id_hash) VALUES (?, ?)")
           .run(producerId, eventIdHash);
         const scopeId = input.scopeId ?? "default";
         this.touchScope(producerId, scopeId, input.sourceType, now);
-        this.db.raw
-          .prepare(
+        this.prepare(
             `INSERT INTO occurrence_events(
                producer_id, event_id, type, scope_id, source_type, value_json, urgency,
                occurred_at, metadata_json, revision, accepted_at
@@ -532,21 +560,19 @@ export class StateHubService {
         }
       },
       (commandId, revision, now) => {
-        const priorClaims = this.db.raw
-          .prepare("SELECT scope_id, signal_id FROM claims WHERE producer_id = ?")
+        const priorClaims = this.prepare("SELECT scope_id, signal_id FROM claims WHERE producer_id = ?")
           .all(producerId) as Array<{ scope_id: string; signal_id: string }>;
-        const deleteTransition = this.db.raw.prepare(
+        const deleteTransition = this.prepare(
           "DELETE FROM binding_transitions WHERE input_key = ?",
         );
         for (const priorClaim of priorClaims) {
           deleteTransition.run(claimKey(producerId, priorClaim.scope_id, priorClaim.signal_id));
         }
-        this.db.raw.prepare("DELETE FROM claims WHERE producer_id = ?").run(producerId);
-        this.db.raw.prepare("DELETE FROM claim_expirations WHERE producer_id = ?").run(producerId);
+        this.prepare("DELETE FROM claims WHERE producer_id = ?").run(producerId);
+        this.prepare("DELETE FROM claim_expirations WHERE producer_id = ?").run(producerId);
         for (const input of claims) {
           this.touchScope(producerId, input.scopeId, input.sourceType, now);
-          this.db.raw
-            .prepare(
+          this.prepare(
               `INSERT INTO claims(
                  producer_id, scope_id, signal_id, source_type, value_json, urgency, expires_at,
                  stale_policy, observed_at, metadata_json, revision, updated_at
@@ -576,14 +602,12 @@ export class StateHubService {
   acknowledge(producerId: string, scopeId: string, signalId: string, claimRevision: number): void {
     const now = new Date().toISOString();
     this.db.transaction(() => {
-      const current = this.db.raw
-        .prepare("SELECT revision FROM claims WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
+      const current = this.prepare("SELECT revision FROM claims WHERE producer_id = ? AND scope_id = ? AND signal_id = ?")
         .get(producerId, scopeId, signalId) as { revision: number } | undefined;
       if (!current || current.revision !== claimRevision) {
         throw new HubError("CLAIM_REVISION_MISMATCH", "The claim no longer has the requested revision", 409);
       }
-      this.db.raw
-        .prepare("INSERT OR IGNORE INTO acknowledgements(claim_key, claim_revision, acknowledged_at) VALUES (?, ?, ?)")
+      this.prepare("INSERT OR IGNORE INTO acknowledgements(claim_key, claim_revision, acknowledged_at) VALUES (?, ?, ?)")
         .run(claimKey(producerId, scopeId, signalId), claimRevision, now);
       const revision = this.db.nextRevision();
       this.recomputeStateful(undefined, now);
@@ -594,12 +618,10 @@ export class StateHubService {
   setPaused(paused: boolean): void {
     const now = new Date().toISOString();
     this.db.transaction(() => {
-      this.db.raw
-        .prepare("UPDATE settings SET value_json = ? WHERE key = 'outputsPaused'")
+      this.prepare("UPDATE settings SET value_json = ? WHERE key = 'outputsPaused'")
         .run(JSON.stringify(paused));
       const suppressedDeliveries = paused
-        ? this.db.raw
-            .prepare(
+        ? this.prepare(
               `UPDATE deliveries
                SET status = 'suppressed', completed_at = ?, lease_until = NULL,
                    last_error = 'Outputs paused before delivery'
@@ -632,7 +654,7 @@ export class StateHubService {
       const claims = this.listClaims();
       const affectedClaims = claims.filter((claim) => changed.some((binding) =>
         bindingMatchesClaim(binding, claim))).length;
-      const published = this.db.raw.prepare(
+      const published = this.prepare(
         "SELECT revision FROM config_revisions WHERE status = 'published' ORDER BY revision DESC LIMIT 1",
       ).get() as { revision: number } | undefined;
       const impact = {
@@ -645,8 +667,7 @@ export class StateHubService {
         currentClaimsAffected: affectedClaims,
         historicalEventsReplayed: 0,
       };
-      this.db.raw
-        .prepare(
+      this.prepare(
           "INSERT INTO config_revisions(revision, status, config_json, impact_json, created_at) VALUES (?, 'draft', ?, ?, ?)",
         )
         .run(revision, JSON.stringify(config), JSON.stringify(impact), new Date().toISOString());
@@ -657,12 +678,11 @@ export class StateHubService {
   publishConfig(revision: number, notify = true): void {
     const now = new Date().toISOString();
     this.db.transaction(() => {
-      const draft = this.db.raw
-        .prepare("SELECT status, config_json, impact_json FROM config_revisions WHERE revision = ?")
+      const draft = this.prepare("SELECT status, config_json, impact_json FROM config_revisions WHERE revision = ?")
         .get(revision) as { status: string; config_json: string; impact_json: string } | undefined;
       if (!draft || draft.status !== "draft") throw new HubError("CONFIG_DRAFT_NOT_FOUND", "Draft not found", 404);
       const impact = JSON.parse(draft.impact_json) as { basePublishedRevision?: number | null };
-      const published = this.db.raw.prepare(
+      const published = this.prepare(
         "SELECT revision FROM config_revisions WHERE status = 'published' ORDER BY revision DESC LIMIT 1",
       ).get() as { revision: number } | undefined;
       if (!Object.hasOwn(impact, "basePublishedRevision") ||
@@ -672,7 +692,7 @@ export class StateHubService {
       const config = JSON.parse(draft.config_json) as PublishedConfig;
       this.validateConfig(config);
       const replacements = new Map(config.driverInstances.map((instance) => [instance.id, instance]));
-      const currentInstances = this.db.raw.prepare(
+      const currentInstances = this.prepare(
         "SELECT id, driver_type, config_json, enabled FROM driver_instances",
       ).all() as Array<{ id: string; driver_type: string; config_json: string; enabled: number }>;
       const changedConfigIds = new Set<string>();
@@ -687,7 +707,7 @@ export class StateHubService {
         const changed = !replacement || current.driver_type !== replacement.driverType ||
           current.enabled !== (replacement.enabled ? 1 : 0);
         if (!changed && !retiring) continue;
-        const unfinished = this.db.raw.prepare(
+        const unfinished = this.prepare(
           `SELECT 1 FROM deliveries WHERE driver_instance_id = ? AND action_kind = 'append-only'
              AND status IN ('pending', 'leased') LIMIT 1`,
         ).get(current.id);
@@ -696,10 +716,10 @@ export class StateHubService {
             "Settle append-only deliveries before changing their driver instance", 409);
         }
         if (retiring) {
-          const activeOutput = this.db.raw.prepare(
+          const activeOutput = this.prepare(
             "SELECT 1 FROM projections WHERE driver_instance_id = ? AND action_json IS NOT NULL LIMIT 1",
           ).get(current.id);
-          const unfinishedState = this.db.raw.prepare(
+          const unfinishedState = this.prepare(
             `SELECT 1 FROM deliveries WHERE driver_instance_id = ? AND action_kind = 'stateful'
                AND status IN ('pending', 'leased') LIMIT 1`,
           ).get(current.id);
@@ -711,18 +731,17 @@ export class StateHubService {
         }
       }
       for (const instanceId of changedConfigIds) {
-        this.db.raw.prepare(
+        this.prepare(
           `UPDATE deliveries SET status = 'suppressed', completed_at = ?,
              lease_until = NULL, last_error = 'Driver configuration changed before delivery'
            WHERE driver_instance_id = ? AND action_kind = 'stateful'
              AND status IN ('pending', 'leased')`,
         ).run(now, instanceId);
       }
-      this.db.raw.prepare("DELETE FROM bindings").run();
-      this.db.raw.prepare("DELETE FROM driver_instances").run();
+      this.prepare("DELETE FROM bindings").run();
+      this.prepare("DELETE FROM driver_instances").run();
       for (const instance of config.driverInstances) {
-        this.db.raw
-          .prepare(
+        this.prepare(
             "INSERT INTO driver_instances(id, driver_type, config_json, enabled, physical_resource_key) VALUES (?, ?, ?, ?, ?)",
           )
           .run(
@@ -734,30 +753,28 @@ export class StateHubService {
           );
       }
       for (const binding of config.bindings) {
-        this.db.raw
-          .prepare("INSERT INTO bindings(id, payload_json, config_revision) VALUES (?, ?, ?)")
+        this.prepare("INSERT INTO bindings(id, payload_json, config_revision) VALUES (?, ?, ?)")
           .run(binding.id, JSON.stringify(binding), revision);
       }
-      this.db.raw.prepare("UPDATE config_revisions SET status = 'superseded' WHERE status = 'published'").run();
-      this.db.raw
-        .prepare("UPDATE config_revisions SET status = 'published', published_at = ? WHERE revision = ?")
+      this.prepare("UPDATE config_revisions SET status = 'superseded' WHERE status = 'published'").run();
+      this.prepare("UPDATE config_revisions SET status = 'published', published_at = ? WHERE revision = ?")
         .run(now, revision);
       this.recomputeStateful(undefined, now);
       for (const instanceId of retiredInstanceIds) {
-        this.db.raw.prepare(
+        this.prepare(
           `UPDATE deliveries SET status = 'suppressed', completed_at = ?, lease_until = NULL,
              last_error = 'Driver instance retired before queued effect delivery'
            WHERE driver_instance_id = ? AND action_kind = 'queued-effect'
              AND status IN ('pending', 'leased')`,
         ).run(now, instanceId);
-        this.db.raw.prepare("DELETE FROM projections WHERE driver_instance_id = ?").run(instanceId);
+        this.prepare("DELETE FROM projections WHERE driver_instance_id = ?").run(instanceId);
       }
       for (const instanceId of changedConfigIds) {
-        const projections = this.db.raw.prepare(
+        const projections = this.prepare(
           "SELECT resource_channel, action_json, revision FROM projections WHERE driver_instance_id = ?",
         ).all(instanceId) as Array<{ resource_channel: string; action_json: string | null; revision: number }>;
         for (const projection of projections) {
-          const unfinished = this.db.raw.prepare(
+          const unfinished = this.prepare(
             `SELECT 1 FROM deliveries WHERE driver_instance_id = ? AND resource_channel = ?
                AND action_kind = 'stateful' AND projection_revision = ?
                AND status IN ('pending', 'leased') LIMIT 1`,
@@ -780,20 +797,17 @@ export class StateHubService {
   }
 
   createRollbackDraft(sourceRevision: number): { revision: number; impact: Record<string, unknown> } {
-    const row = this.db.raw
-      .prepare("SELECT config_json FROM config_revisions WHERE revision = ? AND status IN ('published', 'superseded')")
+    const row = this.prepare("SELECT config_json FROM config_revisions WHERE revision = ? AND status IN ('published', 'superseded')")
       .get(sourceRevision) as { config_json: string } | undefined;
     if (!row) throw new HubError("CONFIG_REVISION_NOT_FOUND", "Configuration revision not found", 404);
     return this.createConfigDraft(JSON.parse(row.config_json) as PublishedConfig);
   }
 
   exportConfig(): PublishedConfig {
-    const row = this.db.raw
-      .prepare("SELECT config_json FROM config_revisions WHERE status = 'published' ORDER BY revision DESC LIMIT 1")
+    const row = this.prepare("SELECT config_json FROM config_revisions WHERE status = 'published' ORDER BY revision DESC LIMIT 1")
       .get() as { config_json: string } | undefined;
     if (row) return JSON.parse(row.config_json) as PublishedConfig;
-    const driverInstances = this.db.raw
-      .prepare("SELECT id, driver_type, config_json, enabled, physical_resource_key FROM driver_instances ORDER BY id")
+    const driverInstances = this.prepare("SELECT id, driver_type, config_json, enabled, physical_resource_key FROM driver_instances ORDER BY id")
       .all() as Array<{
       id: string;
       driver_type: string;
@@ -823,11 +837,9 @@ export class StateHubService {
   diagnosticBundle(): Record<string, unknown> {
     const snapshot = this.snapshot();
     const config = this.exportConfig();
-    const recentHistory = this.db.raw
-      .prepare("SELECT kind, subject_id, payload_json, created_at FROM history ORDER BY id DESC LIMIT 500")
+    const recentHistory = this.prepare("SELECT kind, subject_id, payload_json, created_at FROM history ORDER BY id DESC LIMIT 500")
       .all() as Array<{ kind: string; subject_id: string | null; payload_json: string; created_at: string }>;
-    const deliveries = this.db.raw
-      .prepare(
+    const deliveries = this.prepare(
         `SELECT id, command_id, producer_id, event_id, event_revision, batch_id, driver_instance_id, resource_channel,
                 action_kind, status, attempt_count, deadline_at, last_error, created_at, completed_at
          FROM deliveries ORDER BY created_at DESC, id DESC LIMIT 500`,
@@ -922,8 +934,7 @@ export class StateHubService {
       }
       validate?.();
       if (idempotencyKey) {
-        const existing = this.db.raw
-          .prepare("SELECT command_id, request_hash, accepted_at FROM command_dedupe WHERE producer_id = ? AND key_hash = ?")
+        const existing = this.prepare("SELECT command_id, request_hash, accepted_at FROM command_dedupe WHERE producer_id = ? AND key_hash = ?")
           .get(producerId, dedupeIdentityHash(idempotencyKey)) as {
             command_id: string;
             request_hash: string | null;
@@ -938,14 +949,13 @@ export class StateHubService {
       }
       const commandId = randomUUID();
       const now = new Date().toISOString();
-      this.db.raw
-        .prepare(
+      this.prepare(
           `INSERT INTO commands(id, producer_id, kind, idempotency_key, request_hash, status, accepted_at)
            VALUES (?, ?, ?, ?, ?, 'accepted', ?)`,
         )
         .run(commandId, producerId, kind, idempotencyKey ?? null, requestHash, now);
       if (idempotencyKey) {
-        this.db.raw.prepare(
+        this.prepare(
           `INSERT INTO command_dedupe(
              producer_id, key_hash, command_id, kind, request_hash, status, accepted_at
            ) VALUES (?, ?, ?, ?, ?, 'accepted', ?)`,
@@ -953,35 +963,31 @@ export class StateHubService {
       }
       const revision = this.db.nextRevision();
       work(commandId, revision, now);
-      this.db.raw
-        .prepare("UPDATE commands SET status = 'applied', completed_at = ? WHERE id = ?")
+      this.prepare("UPDATE commands SET status = 'applied', completed_at = ? WHERE id = ?")
         .run(now, commandId);
       if (idempotencyKey) {
-        this.db.raw.prepare(
+        this.prepare(
           "UPDATE command_dedupe SET status = 'applied', completed_at = ? WHERE producer_id = ? AND key_hash = ?",
         ).run(now, producerId, dedupeIdentityHash(idempotencyKey));
       }
       return { commandId, status: "accepted" as const, acceptedAt: now };
     });
     this.events.publish("command.accepted", { producerId, kind, ...accepted });
-    this.events.publish("snapshot.changed", this.snapshot());
+    this.events.publishLazy("snapshot.changed", () => this.snapshot());
     return accepted;
   }
 
   private touchScope(producerId: string, scopeId: string, sourceType: string | undefined, now: string): void {
-    const exists = this.db.raw
-      .prepare("SELECT 1 FROM source_scopes WHERE producer_id = ? AND scope_id = ?")
+    const exists = this.prepare("SELECT 1 FROM source_scopes WHERE producer_id = ? AND scope_id = ?")
       .get(producerId, scopeId);
     if (!exists) {
-      const count = this.db.raw
-        .prepare("SELECT count(*) AS count FROM source_scopes WHERE producer_id = ?")
+      const count = this.prepare("SELECT count(*) AS count FROM source_scopes WHERE producer_id = ?")
         .get(producerId) as { count: number };
       if (count.count >= this.maxScopesPerProducer) {
         throw new HubError("SCOPE_QUOTA_EXCEEDED", `Producer scope quota ${this.maxScopesPerProducer} exceeded`, 429);
       }
     }
-    this.db.raw
-      .prepare(
+    this.prepare(
         `INSERT INTO source_scopes(producer_id, scope_id, source_type, first_seen_at, last_seen_at)
          VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(producer_id, scope_id) DO UPDATE SET
@@ -991,19 +997,34 @@ export class StateHubService {
       .run(producerId, scopeId, sourceType ?? null, now, now);
   }
 
-  private recomputeStateful(commandId: string | undefined, now: string): void {
-    const bindings = this.listBindings().filter((binding) => binding.target.actionKind === "stateful");
-    const claims = this.listClaims();
+  private recomputeStateful(commandId: string | undefined, now: string, changedProducer?: string): void {
+    // A producer input can affect every resource selected by its bindings, including a
+    // resource shared with other producers. Keep ALL competitors for those resources.
+    // Config, TTL, acknowledgement and pause changes continue to use the full path.
+    const { bindings, affected } = this.statefulBindings(changedProducer);
     const candidates: ActionCandidate[] = [];
+    const evaluatedAt = new Date(now);
+    const bindingsByProducer = new Map<string | undefined, Binding[]>();
+    for (const binding of bindings) {
+      const producer = binding.selector.producerId || undefined;
+      const group = bindingsByProducer.get(producer) ?? [];
+      group.push(binding);
+      bindingsByProducer.set(producer, group);
+    }
+    if (affected?.size === 0) return;
+    const producerIds = [...bindingsByProducer.keys()].filter((id): id is string => id !== undefined);
+    const claims = bindingsByProducer.has(undefined) ? this.listClaims() : producerIds.length === 0 ? [] :
+      (this.prepare(`SELECT * FROM claims WHERE producer_id IN (${producerIds.map(() => "?").join(",")})
+        ORDER BY producer_id, scope_id, signal_id`).all(...producerIds) as ClaimRow[]).map(decodeClaim);
+    const acknowledgement = this.prepare(
+      "SELECT 1 FROM acknowledgements WHERE claim_key = ? AND claim_revision = ?",
+    );
     for (const claim of claims) {
-      for (const binding of bindings) {
-        const key = claimKey(claim.producerId, claim.scopeId, claim.signalId);
-        const acknowledged = Boolean(
-          this.db.raw
-            .prepare("SELECT 1 FROM acknowledgements WHERE claim_key = ? AND claim_revision = ?")
-            .get(key, claim.revision),
-        );
-        const candidate = candidateFromClaim(binding, claim, claim.revision, acknowledged, new Date(now));
+      const key = claimKey(claim.producerId, claim.scopeId, claim.signalId);
+      const acknowledged = Boolean(acknowledgement.get(key, claim.revision));
+      const relevant = [...(bindingsByProducer.get(undefined) ?? []), ...(bindingsByProducer.get(claim.producerId) ?? [])];
+      for (const binding of relevant) {
+        const candidate = candidateFromClaim(binding, claim, claim.revision, acknowledged, evaluatedAt);
         if (candidate) candidates.push(candidate);
       }
     }
@@ -1014,7 +1035,9 @@ export class StateHubService {
       if (projection.action) this.assertMappedAction(projection.driverInstanceId, "stateful", projection.action);
     }
     const byKey = new Map(next.map((projection) => [projection.resourceKey, projection]));
-    const old = this.listProjections();
+    const old = affected ? (this.prepare(
+      `SELECT * FROM projections WHERE resource_key IN (${[...affected].map(() => "?").join(",")}) ORDER BY resource_key`,
+    ).all(...affected) as ProjectionRow[]).map(decodeProjection) : this.listProjections();
     for (const previous of old) {
       if (!byKey.has(previous.resourceKey)) {
         byKey.set(previous.resourceKey, {
@@ -1031,8 +1054,7 @@ export class StateHubService {
       const previous = old.find((item) => item.resourceKey === projection.resourceKey);
       const changed = !previous || actionSignature(previous.action) !== actionSignature(projection.action);
       const projectionRevision = changed ? this.db.nextProjectionRevision() : previous.revision;
-      this.db.raw
-        .prepare(
+      this.prepare(
           `INSERT INTO projections(
              resource_key, driver_instance_id, resource_channel, action_json, urgency,
              contributors_json, revision, updated_at
@@ -1074,12 +1096,10 @@ export class StateHubService {
       if (binding.target.actionKind === "stateful" || !bindingMatchesClaim(binding, claim)) continue;
       const inputKey = claimKey(claim.producerId, claim.scopeId, claim.signalId);
       const signature = stableStringify(claim.value);
-      const previous = this.db.raw
-        .prepare("SELECT value_signature FROM binding_transitions WHERE binding_id = ? AND input_key = ?")
+      const previous = this.prepare("SELECT value_signature FROM binding_transitions WHERE binding_id = ? AND input_key = ?")
         .get(binding.id, inputKey) as { value_signature: string } | undefined;
       const transitionOnly = binding.transitionOnly ?? true;
-      this.db.raw
-        .prepare(
+      this.prepare(
           `INSERT INTO binding_transitions(binding_id, input_key, value_signature, updated_at)
            VALUES (?, ?, ?, ?)
            ON CONFLICT(binding_id, input_key) DO UPDATE SET
@@ -1159,8 +1179,7 @@ export class StateHubService {
     let batchId: string | undefined;
     let availableAt = plusMilliseconds(createdAt, options.delayMs ?? 0);
     if (kind === "append-only" && options.batchKey && options.batchWindowMs && options.batchWindowMs > 0) {
-      const openBatch = this.db.raw
-        .prepare(
+      const openBatch = this.prepare(
           `SELECT batch_id, available_at FROM deliveries
            WHERE batch_key = ? AND driver_instance_id = ? AND resource_channel = ?
              AND action_kind = 'append-only' AND status = 'pending' AND attempt_count = 0
@@ -1179,8 +1198,7 @@ export class StateHubService {
         : kind === "queued-effect"
           ? plusMilliseconds(createdAt, 30_000)
           : null;
-    this.db.raw
-      .prepare(
+    this.prepare(
         `INSERT INTO deliveries(
            id, command_id, producer_id, event_id, event_revision,
            driver_instance_id, resource_channel, action_kind, action_json,
@@ -1207,7 +1225,7 @@ export class StateHubService {
   }
 
   private assertMappedAction(driverInstanceId: string, kind: ActionKind, action: NonNullable<Projection["action"]>): void {
-    const row = this.db.raw.prepare("SELECT driver_type FROM driver_instances WHERE id = ?")
+    const row = this.prepare("SELECT driver_type FROM driver_instances WHERE id = ?")
       .get(driverInstanceId) as { driver_type: string } | undefined;
     if (!row || !validMappedAction(row.driver_type, action.name, kind, action.params, this.plugins)) {
       throw new HubError("INVALID_MAPPED_ACTION", "Mapped action does not satisfy its driver contract");
@@ -1226,8 +1244,7 @@ export class StateHubService {
   }
 
   private appendHistory(kind: string, subjectId: string | null, payload: unknown, now: string): void {
-    this.db.raw
-      .prepare("INSERT INTO history(kind, subject_id, payload_json, created_at) VALUES (?, ?, ?, ?)")
+    this.prepare("INSERT INTO history(kind, subject_id, payload_json, created_at) VALUES (?, ?, ?, ?)")
       .run(kind, subjectId, JSON.stringify(payload), now);
   }
 }

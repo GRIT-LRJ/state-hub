@@ -46,9 +46,16 @@ export function readPointer(input: unknown, pointer: string): unknown {
   return current;
 }
 
+const globPatterns = new Map<string, RegExp>();
+
 export function globMatches(value: string, pattern = "*"): boolean {
+  const cached = globPatterns.get(pattern);
+  if (cached) return cached.test(value);
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*").replaceAll("?", ".");
-  return new RegExp(`^${escaped}$`, "u").test(value);
+  const expression = new RegExp(`^${escaped}$`, "u");
+  if (globPatterns.size >= 256) globPatterns.delete(globPatterns.keys().next().value!);
+  globPatterns.set(pattern, expression);
+  return expression.test(value);
 }
 
 function compare(condition: BindingCondition, actual: unknown): boolean {

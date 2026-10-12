@@ -3,6 +3,7 @@ import { cpus, totalmem, platform, arch } from "node:os";
 import { performance } from "node:perf_hooks";
 import Database from "better-sqlite3";
 import { CoreAcceptanceHarness } from "../src/acceptance/harness.ts";
+import { statefulBenchmark } from "./stateful-benchmark.mjs";
 
 const SOURCE_COUNT = 50;
 const OUTPUT_COUNT = 50;
@@ -196,3 +197,4 @@ async function main() {
 }
 
 await main();
+await statefulBenchmark();

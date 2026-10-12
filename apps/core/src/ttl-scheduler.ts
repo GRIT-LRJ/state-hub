@@ -30,8 +30,8 @@ export class ClaimTtlScheduler {
   start(): void {
     if (this.#running) return;
     this.#running = true;
-    this.#unsubscribe = this.events.subscribe((event) => {
-      if (event.type === "snapshot.changed" && !this.#processing) this.refresh();
+    this.#unsubscribe = this.events.subscribeNotice((type) => {
+      if (type === "snapshot.changed" && !this.#processing) this.refresh();
     });
     this.processAndSchedule();
   }

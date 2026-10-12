@@ -28,6 +28,7 @@ interface WaitOptions {
 }
 
 interface CoreAcceptanceHarnessOptions {
+  cpuProfileDirectory?: string;
   childEnvironment?: NodeJS.ProcessEnv;
   deliveryLeaseMs?: number;
   pluginDevelopmentMode?: boolean;
@@ -496,7 +497,9 @@ export class CoreAcceptanceHarness {
     delete childEnvironment.STATE_HUB_PLUGIN_DEVELOPMENT_MODE;
     delete childEnvironment.STATE_HUB_TEST_UPGRADE_CRASH_AFTER_COMMIT;
     delete childEnvironment.STATE_HUB_SUPERVISED;
-    const child = spawn(process.execPath, ["--import", "tsx", entrypoint], {
+    const profileArgs = this.options.cpuProfileDirectory
+      ? ["--cpu-prof", `--cpu-prof-dir=${this.options.cpuProfileDirectory}`, "--cpu-prof-interval=100"] : [];
+    const child = spawn(process.execPath, [...profileArgs, "--import", "tsx", entrypoint], {
       cwd: coreRoot,
       windowsHide: true,
       stdio: [this.options.supervisedStdin ? "pipe" : "ignore", "pipe", "pipe", "ipc"],

@@ -181,6 +181,9 @@ export class DeliveryDispatcher {
         const deliveries = this.claimNext();
         if (!deliveries) break;
         await this.execute(deliveries);
+        // Suppressed/virtual deliveries can resolve synchronously. Yield between
+        // small groups so a backlog cannot starve committed HTTP responses.
+        if (index % 8 === 7) await new Promise<void>((resolve) => setImmediate(resolve));
       }
     } finally {
       this.#running = false;
