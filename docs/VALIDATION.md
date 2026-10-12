@@ -14,6 +14,8 @@ node tools/verify-candidate.mjs
 
 commit 后用 `git rev-parse HEAD^{tree}` 与 evidence 的 tree 核对。二者相同才可把这份测试证据归属于该提交。之后更改 index 或代码需要重新验证；仅有提交信息不同不会改变 tree。
 
+纯说明文档的收尾可以复用最近已验证的代码结果，前提是审查确认 diff 不含代码、依赖、构建输入、运行配置、测试或 CI 修改。记录被验证的代码 commit/tree 以及文档 diff；不要声称文档提交的 tree 与旧证据相同。涉及可执行行为或验收门禁的修改仍必须重新运行对应门禁。这样既保留证据边界，也避免为不影响程序的措辞修订重复运行全部产品测试。
+
 CI 的 `verify.yml` 在 push 和 pull request 上从 checkout 运行基础门禁和容量验收。CI 通过不能替代本地未覆盖的原生桌面、签名或跨平台发行验收。
 
 ## 验证哪些行为

@@ -1,6 +1,8 @@
 # AI 施工日志
 
-本轮从已有工作树继续实施。PASS 指本地规格、正确性、架构、安全审查和四项基础门禁通过；提交均未推送。
+本轮从已有工作树继续实施。PASS 指所注明范围内的本地规格、正确性、架构、安全审查和四项基础门禁通过。历史阶段仅保留本地提交；2026-10-12 用户已授权经测试后推送，远端结果与本地验收分别核对。
+
+2026-10-12 补充：末尾“已提交版本结案核验”记录了在干净 checkout 上发现的新阻断。历史 PASS 表示当时的实际测试和审查结论；当前结案状态以 `ISSUE_PROGRESS.md` 的最新复核为准。
 
 ## Issue #13 — Append-only 有界投递和真实批处理
 
@@ -879,3 +881,243 @@ PASS。
 ### Commit
 
 产品实现 `c934ba5`。
+
+
+## Issue #23 — 三平台安装包与更新（技术阻断，未通过）
+
+### 这张 Issue 要解决什么
+
+让用户可以通过 Windows、macOS 和 Linux 的原生安装包安装、升级和卸载 State Hub，并用真实安装后的启动时间检验桌面体验。
+
+### 原来有什么问题
+
+Tauri 只声明了通用打包目标；Updater 关闭，没有安装或升级的真实 smoke，也没有驱动激活和首屏性能数据。第一次 Windows 构建还暴露两个真实安装故障：Updater 在没有公钥时初始化会让应用启动失败；打包的 Core 缺少插件依赖，启动后立即退出。
+
+### 我改了什么
+
+加入三平台安装包与更新 CI 矩阵、安装/启动/卸载脚本、使用临时签名密钥的更新脚本和明确的版本通道。桌面端只在更新配置有效时启用 Updater，并提供检查、安装更新入口；错误只返回固定类别。补齐打包 Core 的缺失依赖。Windows 本地真实安装已走过畸形 manifest、错误签名、签名正确但内容损坏、成功升级和重启后数据保留。
+
+### 为什么这样改
+
+打包成功无法证明安装后的程序能启动。临时密钥只用于本地/CI 更新验收，且 beta 测试包明确显示未经过操作系统代码签名；真实 stable 密钥另由发布凭据提供。驱动基准从配置发布前计时，包含激活和第一次投递，避免把启动成本漏出测量区间。
+
+### 哪些文件发生变化
+
+桌面 `updates.rs`、`startup_metrics.rs`、`lib.rs`、`App.tsx` 和文案；Core 打包依赖与 `driver-startup-benchmark.mjs`；`tools/release/` 内安装、更新、manifest 和性能脚本；`.github/workflows/package-smoke.yml`、`updater-smoke.yml`；桌面图标与根脚本。
+
+### 数据库是否变化
+
+没有 schema、migration 或 backfill。升级 smoke 使用升级前后的同一 Core 数据目录，并检查数据库仍可由新版本启动。
+
+### 外部行为是否变化
+
+按通道配置的桌面包可检查和安装经过签名验证的更新；未配置更新的包不显示更新入口。新增 Windows NSIS、macOS DMG、Linux AppImage/deb 的构建和真实安装 smoke 工作流；目前只有 Windows 在本机实际执行。
+
+### 风险
+
+macOS 和 Linux 的真实 CI 工作流尚未运行，不能据静态审查推断它们通过。启动耗时受宿主环境影响；本机真实安装的 UI 首屏 P95 约 4.49 秒、Core 就绪 P95 约 7.86 秒，均超过当前严格的 1 秒安装启动门禁。Issue #1/#23 明文要求的是驱动启动和 UI 首屏各不超过 1 秒，没有给 Core 就绪单独设定 1 秒阈值；当前安装 smoke 对 Core 就绪使用了额外的严格检查。把内部计时起点提前到 Rust `main` 后，实际安装的 Alpha 包从 Rust 入口到首屏约 0.8–0.9 秒，启动安装后的 EXE 到首屏却需 4 秒以上；差额发生在 `main` 之前。打包 Core 的约 3.6 秒健康响应也主要包含约 3.1 秒的 EXE 启动调用，而非全部是 Core 初始化。
+
+### 测试
+
+`pnpm test`、`pnpm test:acceptance`、`pnpm check`、`pnpm build`、Rust 6 项测试、release 11 项单测、打包 Core 的真实启动均通过。20 次真实 Core 冷启动从发布驱动配置到首次虚拟投递 P95 为 100.84 毫秒。Windows 本地安装的签名更新四条路径通过，旧版在三类失败后仍健康；成功升级到 0.1.0 后 Core 数据保留。20 次安装版启动测得首屏 P95 4485.19 毫秒，因此发布性能门禁失败。另构建并真实安装 `Alpha (Unsigned)` 包，应用和 Core 都能启动，但外部首屏仍需 4 秒以上；失败门禁后安装器已清理。随后单独测量 `spawn()` 同步返回：桌面 EXE 约 3.38 秒，Core EXE 两次为 3.19/3.09 秒；Core 进程创建返回后至健康响应约 0.52 秒。一个仅写入标记的 135 KB 未签名 Rust EXE，在同目录启动五次均约 3.27–3.31 秒；同目录 Microsoft 有效签名的 98 KB EXE 后四次约 18–21 毫秒。PowerShell 启动桌面 EXE 同样测得约 3.4–6.1 秒的进程创建耗时，因此不是 Node 测试器独有。三平台矩阵仍需远端真实执行。
+
+### Reviewer 曾发现的问题
+
+审查发现旧的驱动计时漏掉配置发布和激活，现已纳入。第一次打包的应用因无公钥启动失败、Core 因缺少 `fflate` 退出，均已修复并通过真实安装复测。损坏安装器也必须先正确签名才能检验安装失败后的恢复；测试已执行。签名 CLI 未明确传空密码时曾等待交互，工作流现显式传入空密码。Windows smoke 一次在桌面进程结束后立即清理目录触发 `EPERM`；现先等待 Core 侧车真正退出，再清理，复测没有再因文件句柄报错。启动诊断排除了 Rust/React/sidecar 初始化作为首个 3 秒延迟的原因：它发生在同步创建未签名进程时。两个未签名样本都没有网络来源标记；Windows Defender 实时防护关闭、Code Integrity/Defender 日志无匹配事件，但另有企业安全防护服务在运行。签名/信任状态与耗时高度相关，尚无证据精确归因到某一产品或策略；WPR 系统跟踪和文件过滤器列表因本机权限策略拒绝访问。自动审批拒绝移除安装后 Core 就绪的 1 秒门禁，理由是这会降低 Issue #1 的发布标准；门禁保持原样。当前 Critical 0；High 2（Windows 启动性能、macOS/Linux 实测缺失）；Spec FAIL；Can commit NO。
+
+### 最终状态
+
+BLOCKED（技术与平台证据），尚未满足 PASS，不关闭 Issue。Windows 首屏性能仍需达到 1 秒；macOS/Linux 必须在对应平台真实运行。该状态不是 DOMAIN BLOCKED。
+
+### Commit
+
+尚无；当前修改保留在工作树，待全部验收通过后独立提交。
+
+
+## Issue #24 — Stable 签名、公证与发布门禁（依赖与外部证据阻断，未通过）
+
+### 这张 Issue 要解决什么
+
+确保 stable 候选只有在产品验收、三平台真实安装验证、操作系统签名或公证和来源证明全部成立时才可进入发布流程。
+
+### 原来有什么问题
+
+仓库没有 stable 候选流水线，也不检查证书、Apple 公证、发布版本、更新签名或候选产物的来源。
+
+### 我改了什么
+
+建立手动触发的 fail-closed 候选流水线：要求现有版本 tag、#1–#23 在该提交上记录为 PASS、四项基础门禁和性能门禁；按平台导入签名凭据，构建并实际核验 Windows Authenticode、Apple Developer ID 与公证、Linux 包和更新签名；对候选文件生成来源证明。四平台产物汇总时检查更新签名、为两个同名的 macOS 架构产物生成唯一发布文件名，生成 stable 更新 manifest 与五个安装包的 SHA-256 清单，并核验构建证明的来源提交。未签名 alpha/beta 采用醒目名称和独立安装身份。
+
+### 为什么这样改
+
+仅存在证书字符串或构建配置，不能证明最终安装器真的签名或公证；必须验收候选文件本身。Windows、macOS、Linux 汇总后再生成同一份四目标 manifest，可以防止缺少某个平台或两个 macOS 文件同名覆盖。保留候选工作流为人工触发，直到上游 #23 和实际凭据均满足条件。
+
+### 哪些文件发生变化
+
+`.github/workflows/stable-candidate.yml`；`tools/release/stable-policy.mjs`、`stable-config.mjs`、`stable-artifacts.mjs`、`manifest.mjs`、签名验证脚本及对应单测；未签名测试包的配置脚本。
+
+### 数据库是否变化
+
+没有 schema、migration 或 backfill。
+
+### 外部行为是否变化
+
+增加候选产物和更新元数据的本地/CI 生成路径；目前没有执行 stable 发布，也没有推送或上传任何正式产物。未签名测试包在窗口标题和安装身份中标明 Alpha/Beta (Unsigned)。
+
+### 风险
+
+本机没有 Windows 正式代码签名证书、Apple Developer ID/公证凭据，也没有 macOS/Linux 运行器的真实候选记录；无法宣称正式候选通过。候选流水线目前生成可审核的产物，不执行 stable 发布。签名、公证和来源校验仍需在真实候选上运行。
+
+### 测试
+
+发布策略、缺少凭据、错误通道、无签名文件、四平台 manifest、重名 macOS 文件处理等 11 项 release 单测通过；三个工作流 YAML 可解析。Windows 临时密钥的真实更新 smoke 已通过，但它不代表 stable 操作系统签名或 Apple 公证。
+
+### Reviewer 曾发现的问题
+
+最初的四平台汇总工具没有接入候选流水线，且 macOS 两种架构的更新压缩包可能同名；现在统一汇总并赋予唯一发布文件名。单测发现 JavaScript `map(basename)` 会把数组索引误当作扩展名参数，已修正。安全复核又发现正式签名和 Apple 公证凭据原本在整个构建 job 中可见，依赖安装也能读取；现在仅在导入、策略检查和签名构建步骤注入。当前 Critical 0；High 2（#23 未通过、真实签名/公证/证明未执行）；Spec FAIL；Can commit NO。
+
+### 最终状态
+
+BLOCKED（依赖与外部验收），尚未满足 PASS，不关闭 Issue。需先解决 #23，并取得正式签名/公证凭据和三平台真实候选证据。该状态不是 DOMAIN BLOCKED。
+
+### Commit
+
+尚无；当前修改保留在工作树，待 #23 和正式候选全部通过后独立提交。
+
+
+## 2026-10-12 — 已提交版本结案核验（#2–#22）
+
+### 这次核验要解决什么
+
+确认他人只取得已提交代码后，是否能够复现测试并运行桌面功能，从而判断是否可以推送并关闭对应 Issue。先前的本地开发目录已有构建产物，也包含 #23/#24 的未提交修改；它的通过结果不能自动证明提交快照本身完整。
+
+### 核验范围与结果
+
+固定 HEAD 为 `f9abefe692173e150abe5af715dbbf5eaffb34f5`，远端 main 实时读取为 `c9786f051fd5a1de9166030462af2642144083ad`，相差 42 个提交。创建独立 detached worktree，并重新读取 GitHub Issue #1–#24 的完整正文和评论；原开发目录、已有 commits 和 #23/#24 修改均保留。GitHub 已关闭 #2、#8、#9、#12，#2–#22 中其余 17 张仍开放。
+
+### 测试实际验证了什么
+
+环境为 Windows、Node 24.15.0、pnpm 10.17.1。离线依赖安装因本机缓存缺少指定 pnpm 包失败；改为从 npm 官方 registry 按同一锁文件正常安装，安装成功且锁文件未变化。随后执行项目正式命令 `pnpm verify`。
+
+`pnpm test` 中 CLI 8 项、domain 9 项、SDK 4 项、desktop 21 项、plugin-kit 5 项通过；Core 的 17 个测试文件、82 项测试通过，但 `plugin-host.test.ts` 在加载阶段失败，错误为 `Failed to resolve entry for package "@state-hub/sdk"`。SDK 的包入口指向 `dist/index.js`，干净目录中该文件不存在，而根测试脚本只先构建 protocol 和 domain，没有先构建 SDK。SDK 自身单测通过不代表已生成其对外入口。这是可从脚本和文件落点确定的构建前提遗漏，不是通过反复运行碰巧变绿的 flaky 结果。
+
+`pnpm verify` 因该失败退出 1，后续 `test:acceptance`、`check`、`build` 没有执行，不能标注为本轮通过。完整输出暂存在 `%TEMP%/state-hub-closure-f9abefe-20261012/verify.log`；干净 checkout 保留在同目录的 `checkout`，便于继续修复和复核。
+
+### Reviewer 又发现了什么
+
+Standards 审查发现两个已提交桌面版本的启动阻断：`lib.rs` 无条件初始化 updater，但配置没有它要求的公钥；打包 Core 没有包含新增 plugin-kit 运行所需的 `fflate` 资产。这两项都曾在 #23 的真实安装中暴露并修复，但修复尚未进入提交。因此工作树能启动，不等于只取得已提交代码也能启动。本次依据固定源码、实际依赖源码和之前保留的安装证据核实，没有冒充重新执行了原生安装 smoke。干净 checkout 缺少图标生成前提还需后续原生构建核查，暂不作为已证实的新缺陷。
+
+Spec 审查确认 #16 要求实际桌面与 Core 的集成验收，#17–#19 又以 #16 为验收依赖。现有 connection acceptance 由测试夹具手动终止和重启 Core，没有直接证明真实 Tauri 监督者自动恢复。因此在可发布提交上仍需验证真实桌面启动、Core 崩溃自动恢复和退出清理；不要求为此等待 #23 的全部跨平台发布工作。
+
+Spec 审查另发现 #22 明文要求性能场景包含真实“投影”，但当前 500 条绑定全为 append-only，负载只提交 OccurrenceEvent；该事件路径不执行 stateful 重算。已有事件吞吐和延迟数据仍有效，但缺少 claim 仲裁、投影写入的同规模性能证据。需要补充该场景，不能仅保留原 Spec PASS。
+
+审查曾怀疑打包程序用 `process.execPath` 启动 JS 插件会误启动 Core；核对固定版本 pkg 的 subprocess 补丁后已排除，未把未成立的疑点作为 blocker。对 #2–#15、#20–#21 的相关代码与验收抽查没有发现新的逐项阻断；这不替代最终全仓库审查。
+
+### 当前处理与最终状态
+
+本次是结案就绪核验；没有修改产品代码或把失败测试绕过。修正进度表：#16–#19 为 BLOCKED，#22 为 IN PROGRESS；保留历史实现、测试和提交记录。当前整体 Spec/独立提交门禁 FAIL，不能把 #2–#22 整批作为已完成推送并关闭。下一步修复应补齐测试构建前提、从已有工作树提取必要启动修复、补实际桌面监督验收以及 #22 的投影负载，再在独立快照重跑门禁。上述事项均是技术问题，没有新增领域决策。
+
+### Commit
+
+本次没有创建 commit，没有 push，也没有修改 GitHub Issue 状态。现有提交保持原样；本记录和进度表更正保留在工作树。
+
+## 2026-10-12 — 干净提交验证与证据边界修复
+
+### 原来的问题
+开发目录已有 SDK 编译产物，所以本地测试通过；独立 checkout 中 SDK 尚未构建，Core 测试加载失败。过去把整个工作树的通过结果用于部分提交，扩大了证据范围。
+
+### 我改了什么、为什么这样改
+测试入口先按依赖顺序构建共享包。新增暂存快照验证工具，从 Git index 导出完整 tree，在新目录安装并运行四项门禁；证据绑定 tree、锁文件、环境和逐命令退出码。新增 push/PR CI，并明确真实桌面、状态投影与发行验收不能互相替代。
+
+### 关键文件与行为影响
+package.json、tools/verify-candidate.mjs、.github/workflows/verify.yml、docs/VALIDATION.md。无数据库变化，无业务/API变化；首次验证会重新安装依赖，耗时较长。
+
+### 测试
+独立目录 state-hub-candidate-dZ7Ik7 中安装、pnpm test、pnpm test:acceptance、pnpm check、pnpm build 均 exit 0。之前失败的 plugin-host 6 项通过。证据 tree 为 16c7150360d7848b362ac3828e26def2f9394b14，与提交 tree 相同。完整日志保存在操作系统临时目录的 evidence.json 旁。
+
+### Reviewer 曾发现的问题
+两个独立 reviewer 分别给出 Spec/Correctness PASS、Standards PASS，Critical/High/Medium 均 0。Low：证据尚未记录实际 pnpm 版本；本次实际为 10.17.1，后续完善记录，不阻断此修复。四项门禁结果只恢复基础提交验证，不恢复桌面和投影容量的结案状态。
+
+### 最终状态与 Commit
+PASS（验证基础设施范围）。47a9311b022b3d7a4dd2b44310d41872a671bb46。用户随后明确授权修复经测试后推送；目前尚未执行推送。
+
+## Issue #22 — 补齐真实状态投影容量验收并修复性能
+
+### 这张 Issue 要解决什么、原来有什么问题
+要证明多个来源同时更新状态时，系统仍能及时响应并把正确状态送到目标。原来的容量测试只发送瞬时事件，没有经过状态仲裁和投影，不能代表这条主要业务路径。新增真实场景后，旧实现连预热都超过 60 秒。
+
+### 我改了什么、为什么这样改
+新增 50 个来源、50 个 HTTP 输出、500 条绑定和 500 个活动状态的测试。持续更新、集中突发和重启恢复都检查数据库赢家与真实 HTTP 目标收到的最终状态。重启后必须每个输出实际收到新请求，不能用重启前累计数据冒充恢复。
+
+性能分析发现大量重复读取和全量重算。普通状态更新现在只重算该来源会影响的资源，同时保留这些资源上其他来源的竞争；配置、TTL、暂停、确认等仍使用完整重算。复用有界的 SQL 与匹配缓存；没有 SSE 订阅者时不生成昂贵的管理快照，但到期调度仍收到变更通知。投递循环每处理八项向事件循环让出一次执行机会，让已提交请求及时返回。这些修改没有放松事务、持久化、lease fencing 或重试上限。
+
+### 哪些文件发生变化
+Core 的 service、dispatcher、events、ttl-scheduler；domain 匹配缓存；stateful-benchmark、performance-benchmark、acceptance harness 及相关回归测试。
+
+### 数据库是否变化、外部行为是否变化、风险
+没有 schema/migration/backfill。API 和输出语义不变。风险是按资源缩小计算范围可能漏掉其他来源，因此专门覆盖共享资源竞争和不限来源的绑定；SSE 有订阅者时仍保留原有完整快照行为。
+
+### 测试
+隔离候选 state-hub-candidate-zNnrfX 的四项门禁和 test:performance 全部 exit 0。tree 8aa155013c23ca97a3b4fcaeda1df08f70e6f6fb 与提交一致。状态负载持续约 100.05 次/秒，P95 4.40ms；1000 次突发、并发 64，P95 94.44ms；恢复后 P95 7.19ms。共观察 753 次实际 HTTP 投递，逐资源验证重启重放且无死信。性能场景 SSE 订阅数为 0，不能由此宣称打开管理界面时也达到同样延迟。
+
+### Reviewer 曾发现的问题
+审查要求恢复断言只看重启后的请求，避免旧数据假通过，并明确突发并发与 SSE 条件。全部修复。性能优化过程中各次超时和超过 100ms 的结果均保留，没有降低阈值。早期 tsx CLI 包装启动出现两次原生进程异常，未认定根因；正式脚本使用既有 node --import tsx 入口，最终候选门禁通过。两个独立 reviewer 最终 Critical/High/Medium/Low 均为 0；Spec、Correctness、Standards、安全和静态恢复审查 PASS。
+
+### 最终状态与 Commit
+PASS（记录的规定负载和环境范围）。3325dfbeafeb1c981d4737a5bdcb69ca1f466608。
+
+## Issue #16 — 补齐真实桌面启动、连接与生命周期验收
+
+### 这张 Issue 要解决什么
+桌面打开后应连接到它自己监督的 Core；Core 意外退出后可以自动恢复；桌面退出后不会留下 Core。界面每次都先取得完整快照，再订阅变更通知。
+
+### 原来有什么问题
+已提交版本无条件初始化尚未配置的 updater，且打包遗漏 fflate 运行资产和图标。修复曾存在于未提交发行工作中，不能算作已提交版本的能力。原有测试由夹具重启 Core，没有直接验证真正的 Tauri 监督者。
+
+### 我改了什么、为什么这样改
+从已有发行修改中单独提取必要的启动修复，没有重做发行功能。仅在 updater 已启用且配置完整时加载插件；打包包含必要依赖，图标纳入版本管理。添加独立 identifier、临时数据和隐藏窗口的真实桌面验收构建。故障注入只在专用 Cargo feature 中编译，正常构建不能靠环境变量开启它。
+
+真实验收又发现一个此前漏测的产品阻断：Core 已就绪，但浏览器因 OPTIONS 预检返回 404 而无法连接。Node HTTP 测试没有浏览器跨域检查。修复只对既定的三个 Tauri origin 和管理路径响应预检，实际请求仍要求私有管理 token；SSE 的原生响应也携带相同的批准头。生产者 API 仍拒绝浏览器来源。
+
+### 哪些文件发生变化
+Core server 与 desktop-origin 验收测试；Tauri lib、supervisor、updater_config、lifecycle_smoke、图标和专用测试配置；桌面 api；prepare-sidecar、desktop-lifecycle-smoke、Windows CI 与 NATIVE_TESTING 文档。
+
+### 数据库是否变化
+没有 schema、migration 或 backfill。
+
+### 外部行为是否变化
+打包桌面现在能真正取得管理快照并订阅 SSE。未配置的 updater 不再阻止程序启动。没有扩大管理 token 权限，也没有允许任意网页访问管理接口。
+
+### 风险
+跨域响应属于安全边界，必须同时保留精确 origin 和 token 两道检查。测试专用构建不能当作发行包。Windows 结果不代表其他平台安装、升级或启动性能。
+
+### 测试
+真实 Core 的浏览器预检测试先得到 404 而失败，修复后验证批准 origin、缺 token、恶意相似域、非法方法/头、生产者隔离和实际 SSE 首帧。Rust 7 项通过，包括真实 Windows 凭据库与 Core 互通。
+
+最新真实桌面证据为 %TEMP%/state-hub-desktop-lifecycle-HcvSHw/results.json：自动恢复后真实 spawn/连接代次均为 1、2；启动失败恰好五次后停止；外部终止桌面后 Core 退出；三个场景均无受测 Core 遗留。另用独立 Core 进程实际验证清理助手识别正确 image、拒绝其他 image，并通过持有的进程句柄终止。
+
+桌面可执行文件来自隔离 tree 3f41d6e 的原生 Release 构建，后续 tree 仅修改 Core server、其回归测试和外部 smoke runner；Rust/前端输入没有变化。Core 已从包含 CORS 修复的隔离 tree 35a0905 重新打包，最终 smoke 使用最新 runner。保留这些构建来源，不冒称重新编译了未变化的桌面二进制。
+
+### Reviewer 曾发现的问题
+失败 smoke 最初只清理桌面，且证据可能只列此前 PASS。现在失败明确记录为 FAIL，收尾不改变原判定。实际看到 Windows 在五次启动内重用 PID，不能以 PID 不同证明重启；改为真实 spawn/连接代次，存活核对同时检查 executable。review 又指出“检查路径后按裸 PID 终止”的竞态，已改为持有同一个 Windows Process Handle 完成核对和终止。
+
+完整门禁曾在 plugin-install 的 Vitest fork 启动时遇到 IPC 通道关闭。该文件单独及六次退出观测运行均通过，带子进程退出记录的整套 acceptance 也通过；没有找到对应 Windows 应用崩溃事件。触发原因尚未确定，保留 Medium 测试基础设施风险，不宣称已修复或把失败抹去。新候选仍必须完整通过四项门禁。
+
+### 最终状态与 Commit
+PASS。03f71e6a54584936a2fd7ecbf8940ca84314a9cc；提交 tree f13aa05d600f51b075694e1d0c7cf7399153ce8f 与隔离候选 K1igHX 的 evidence.json 一致，安装和四项门禁全部 exit 0。随后同一候选 test:performance 通过：状态投影持续 P95 4.74ms、突发 P95 95.03ms、恢复 P95 6.13ms。性能条件仍为无 SSE 订阅、突发并发 64。
+
+## 2026-10-12 — 三项修复后的跨 Issue 集成复核与推送范围
+
+### 审查结论
+重新读取 Issue #1、架构规范和相关 Issue，复核基础验证、容量优化、桌面修复的组合。两位独立 reviewer 分别检查规格/正确性和架构/安全：事务提交边界、投影 revision、旧 lease 写回隔离、调用前重试预算、TTL 通知、配置发布/回滚、暂停/确认、持久去重与支持包脱敏没有因本轮修改退化。Critical 0、High 0；Medium 1 为上述未定位的 Windows 测试 worker IPC 波动，产品修复范围无待修 blocker。
+
+### #17–#19 的验收依赖
+原有 UI 组件交互、真实 Core 管理客户端、Windows OS 凭据与 Core 互通证据仍有效。本次补齐了已提交程序的实际启动、浏览器传输和 Tauri 生命周期，并重新通过全部门禁，因此 #16–#19 恢复本地 PASS。没有声称重新在原生窗口逐按钮点击；也没有把这些结果当作跨平台发行验收。
+
+### 仍未完成什么
+#23 的 Windows 安装首屏 P95 约 4485ms，仍高于 1 秒，入口前延迟具体原因未确定；macOS/Linux 安装与升级 smoke 仍缺实际执行证据。#24 缺正式签名、公证与完整候选证明。它们是技术/环境/发行证据阻断，领域决策数仍为 0，整体 Issue #1 和发行 Spec 仍不能标 PASS。
+
+### Git 与证据
+本轮新增修复提交为 47a9311、3325dfb、03f71e6，既有提交未改写或 squash。只把通过验证的提交及对应文档纳入推送范围；保留尚未提交的 #23/#24 工作树。GitHub Issue 没有自动关闭。原始成功和失败日志都保留在文中列出的临时目录；安装/源码树/门禁退出码与原生构建输入分开记录。文档后续提交仅更新记录，不冒称自身 tree 等于此前代码候选 tree。
+
+收尾文档候选 554dfa682f59a9c5d0a60c30611b2123d92db35c 在独立目录 G8Y91J 再次完整通过安装与四项门禁。随后仅修正文档中的职责措辞、PID 重用说明和纯文档验证范围；已检查这些说明不属于构建输入，最终文档提交复用代码提交 03f71e6 的运行证据，保留与旧完整 tree 不同的事实。
