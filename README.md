@@ -6,15 +6,17 @@ State Hub 是一个本地优先的桌面信号路由与输出协调平台。它�
 
 ## 开发
 
+安装好 Node.js 24、pnpm 10.17.1、Rust 和 Tauri 平台编译依赖后，在项目根目录运行：
+
 ```powershell
-corepack enable
-pnpm install
-pnpm test
-pnpm test:acceptance
-pnpm check
-pnpm build
-pnpm dev:core
+npm run dev
 ```
+
+这条命令自动按锁文件安装依赖、构建共享包和 Core sidecar，再启动 Vite 与 Tauri 桌面窗口；桌面会自动启动并管理 Core。无需另开终端运行服务，也无需手动设置管理令牌。第一次编译 Rust 和准备 sidecar 会较慢。
+
+修改 `apps/desktop/src` 中的界面代码后会热更新；修改 Rust 代码后 Tauri 会重新编译。修改 Core 或共享包后，按 `Ctrl+C` 停止，再运行 `npm run dev`，便会重新构建并加载最新代码。关闭窗口默认隐藏到托盘；结束开发请在终端按 `Ctrl+C`。这是本地开发启动，不生成安装包。
+
+底层仍使用 pnpm 管理 workspace 依赖，不需要执行 `npm install`。仅调试前端可用 `pnpm dev:desktop`；仅调试 Core 的令牌要求见 [运行手册](docs/OPERATIONS.md)。
 
 核心服务启动后会在当前用户运行目录写入只对当前用户开放的 discovery 文件，并监听随机 loopback 端口。生产者 API 需要独立 bearer token；管理 API 只接受由桌面壳注入的私有会话令牌。
 

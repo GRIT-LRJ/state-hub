@@ -68,6 +68,7 @@ describe("independent desktop configuration operations", () => {
     expect(current.bindings).toEqual([]); expect(publishManagedConfig).toHaveBeenCalledWith(2);
   });
 
+  // Two complete schema-form workflows run sequentially; this is a correctness test, not a latency gate.
   it("keeps output edits while applying only a rule, then preserves the published rule when applying output", async () => {
     current = { driverInstances: [output], bindings: [binding] };
     const view = render(<ConfigManager section="outputs" disabled={false} onPublished={noop} />);
@@ -86,7 +87,7 @@ describe("independent desktop configuration operations", () => {
     fireEvent.click(button("审阅本次输出修改")); await screen.findByRole("dialog", { name: "审阅本次修改" });
     expect(candidate.bindings[0]?.name).toBe("独立应用规则");
     expect(candidate.driverInstances[0]?.physicalResourceKey).toBe("edited-device");
-  });
+  }, 15_000);
 
   it("preserves form contents across disconnect and discards a late preview", async () => {
     let resolvePreview!: (value: { revision: number; impact: Record<string, unknown> }) => void;

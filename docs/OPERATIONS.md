@@ -8,6 +8,22 @@
 - Tauri 桌面编译需 Rust stable、Cargo、平台 WebView/编译工具链
 - Windows 原生依赖需要 MSVC；Linux 的 OS keyring 需要 Secret Service/libsecret
 
+## 一键开发启动
+
+在项目根目录执行：
+
+```powershell
+npm run dev
+```
+
+入口使用 pnpm 按锁文件安装依赖，随后构建共享包和最新 Core sidecar，再通过 `tauri dev` 启动 Vite、桌面窗口及受监督的 Core。运行到哪一步失败就停在哪一步，不继续启动旧构建。Node/pnpm、Rust 和系统编译工具链需预先安装；第一次启动编译耗时较长。
+
+界面源码由 Vite 热更新，Rust 变更由 Tauri 重新编译。Core 和共享包变更需在终端 `Ctrl+C` 后重新运行同一条 `npm run dev`，入口会重建 sidecar。关闭窗口只隐藏到托盘，不等于结束开发。该入口使用现有本机配置与系统凭据，不重置数据，也不构建或安装发行包；无需单独启动 `dev:core` 或手工注入管理令牌。
+
+`pnpm dev:desktop` 保留为仅前端 Vite 调试入口，不等同于完整桌面应用。依赖仍由 pnpm 管理，无需 `npm install`；依赖清单变更时先更新并提交 pnpm 锁文件，入口遇到锁文件不一致会明确失败。
+
+## 验证与发行构建
+
 ```powershell
 pnpm install
 pnpm test
