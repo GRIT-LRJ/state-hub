@@ -144,3 +144,16 @@
 修订前候选 bf60288dd98939e3293ef8660eb53c9e9b49c90e 的证据 `%TEMP%/state-hub-candidate-BG5AoJ/evidence.json` 保持 FAIL：安装和单元测试退出 0，acceptance 在 plugin-runtime 的 Vitest/tinypool 通信报 ERR_IPC_CHANNEL_CLOSED，未运行后续 check/build。用户随后改变要求，故该候选未提交，不再重试已废弃范围，不能把新候选结果归属给它。
 
 当前定向验证：性能政策 4/4、release 12/12、1000 事件完整性 1/1；workflow YAML 和自动/手动触发分离检查通过。Spec 审查对应用户的新验收优先级；Correctness 检查正确性断言与 bounded timeout 保留、只有数值阈值降为参考；Security 检查无持久化/鉴权/签名豁免且只允许 #22 DEFERRED；Recovery 检查真实生命周期与重启/回收路径未删除。完整候选、真实启动与远端 CI 结果随后补记。
+
+
+## 2026-10-14 — 调整后的本地验证完成
+
+候选 tree `07681d923293203f236faf355b625bdbbceb2d0c`，父提交 `7cb5c54e57c2fe464c41cf7378f029a830af68c7`，证据 `%TEMP%/state-hub-candidate-fdYHDx/evidence.json`：冻结安装、test、test:acceptance、check、build 全部退出 0，候选整体 PASS；同一导出目录 release tests 12/12（release-tests.log）。性能政策 4 项回归包含超参考不阻断、显式对照仍拒绝、无效测量与真实功能错误继续失败。此前 BG5AoJ 的 IPC FAIL 不改写；本次通过不代表已根治历史运行器偶发 IPC 问题。
+
+工作树原样运行完整性能报告与 20 次驱动启动均退出 0（`%TEMP%/state-hub-reference-policy-performance.log`、`state-hub-reference-policy-driver.log`），仅作为新报告策略的执行证据，未做性能结案。
+
+真实根目录 npm run dev 使用独立临时数据：`%TEMP%/state-hub-usable-b543669e8c7246dd8eca148a81cda7a0/`，含 dev.log、startup-evidence.json、shutdown-evidence.json。桌面首屏回执有效，Core 健康和 Vite 均 HTTP 200；Ctrl+C 后记录的桌面/Core PID 与 1420/Core 端口均不存在。开发构建和同时运行验收下的时间仅记录，不作为发布性能基线；未声称完成原生视觉检查。未改用户配置/凭据。
+
+提交前再次读取 VALIDATION、核对 index tree，按当前用户授权提交和推送。远端 CI 待运行结果，不关闭 Issue，不发布 stable。
+
+代码提交 `21c63322646a9d65ad78d212387e1109b3de6d0a` 的 tree 与上述候选证据一致；后续仅这两份进度/日志文档补记结果，复用该代码证据，不声称文档 tree 相同。
