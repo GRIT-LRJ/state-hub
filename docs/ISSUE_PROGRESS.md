@@ -1,6 +1,12 @@
 # Issue 施工总表
 
-## 2026-10-14：开发窗口连接 Core 修复（验证中）
+## 2026-10-14：开发窗口连接 Core 修复（Windows 范围已验证）
+
+最终验证代码 tree：`2b207fd4f1b77c1a13a2d942dbcbab5246c8e4c0`，父提交 `a9ad3fb81228a9c958ffea0ff9bbd66e7ca12dd4`。`%TEMP%/state-hub-candidate-4evYSS/evidence.json` 的冻结安装、pnpm test 退出 0；首次 acceptance 在第 17 组 source-credentials 遇到历史 ERR_IPC_CHANNEL_CLOSED，原始 FAIL 保留。同一未修改候选的 `retry-evidence.json` 记录完整 test:acceptance、check、build 全部退出 0，补充结果 PASS；不能据此宣称 Windows 运行器偶发 IPC 故障已根治。
+
+本次验收对应：精确开发来源与管理令牌、配置发布和读回、SSE 后续更新由 desktop-origin 的真实 Core 测试覆盖；安全错误分类、刷新失败原因保留、晚挂载识别耗尽和停止定时重试、旧代次结果丢弃、编辑保留由 API/connection-loop/App 回归覆盖；真实开发与打包窗口的首次连接、Core 自动监督恢复、耗尽 UI 回执及桌面退出回收由下述六场景原生证据覆盖。最终候选相比这些原生构建的 tree 474f9925c53f342ebdf022b6993f0c23b50e5e66 仅变更两份测试（时限和旧断言）及说明文档，生产代码与原生构建输入未改。
+
+Windows 开发连接修复范围完成；不关闭 Issue，不表示 macOS/Linux 原生、安装包签名或发布验收完成。代码已提交为 `5b1a23fc69115c3d3a245f761eb3d20ce063004f`，提交 tree 与上述验证代码 tree 完全一致。用户已授权提交并推送 origin/main；最终证据收尾仅更新本表与施工日志，作为独立文档提交随代码推送。按 VALIDATION 的纯文档例外引用上述代码 commit/tree，不声称文档提交与该 tree 相同；远端 CI 结果另行验证。
 
 第二候选 41af94d819a9495e05320373285738a277d092bf（L3FLyn）：全部单元通过；验收首次出现历史运行器 IPC 中断，原样重跑后真实 Core 19 组通过，但桌面旧错误字符串断言未同步，仍记 FAIL。该断言现已改为固定错误码并定向验证，最终候选随后记录。
 
@@ -8,7 +14,7 @@
 
 修复仅在 Tauri 开发资源模式下注入当前 devUrl 的精确本机来源，打包模式覆盖清空继承设置，保留临时管理 token 和生产者授权。连接提示改为安全分类，原生保存恢复耗尽终态；前端停止终态定时重试并提示从托盘退出重开。未增加普通浏览器管理或重启 Core 按钮，数据结构不变。
 
-本次验证覆盖 Core 来源/凭证/配置发布/快照/SSE、前端错误与编辑保留、原生模式选择及耗尽读取，并补入真实开发窗口生命周期 CI。候选树及原生验收最终证据随后补记；本段不声明整体 PASS。
+本次验证覆盖 Core 来源/凭证/配置发布/快照/SSE、前端错误与编辑保留、原生模式选择及耗尽读取，并补入真实开发窗口生命周期 CI。上述最终记录取代实施阶段的待验证状态，以下失败轮次和历史证据保留。
 
 原生补充证据：开发默认来源 localhost:1420 的三场景见 `%TEMP%/state-hub-desktop-lifecycle-xIGdox/results.json`，打包来源的三场景见 `%TEMP%/state-hub-desktop-lifecycle-MGGFWW/results.json`，均覆盖首次快照/订阅、监督恢复、耗尽前端回执和退出回收。首次候选 474f9925c53f342ebdf022b6993f0c23b50e5e66 的 dNhmdU/evidence.json 保持 FAIL（两条既有表单测试 5 秒超时）；单独重跑复现后，仅放宽这两条完整多步骤用例到 15 秒，重跑新候选，不把旧失败改写为通过。
 

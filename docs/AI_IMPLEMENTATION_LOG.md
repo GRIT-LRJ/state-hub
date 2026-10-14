@@ -1,5 +1,15 @@
 # AI 施工日志
 
+## 2026-10-14 — 开发连接修复最终验证
+
+最终代码候选 `2b207fd4f1b77c1a13a2d942dbcbab5246c8e4c0`（parent `a9ad3fb81228a9c958ffea0ff9bbd66e7ca12dd4`），目录 `%TEMP%/state-hub-candidate-4evYSS/`。冻结安装、pnpm test 退出 0（桌面 48、Core 105 项单元以及其余包/政策测试）；初次 acceptance 在 source-credentials 启动遇到 ERR_IPC_CHANNEL_CLOSED，`evidence.json` 原样保留 FAIL。同一未修改 checkout 的 `retry-evidence.json` 记录完整 pnpm test:acceptance（19 组 Core 文件及 4 项桌面真实接口用例）、pnpm check、pnpm build 均退出 0，补充证据 PASS，结束时 index tree 仍等于候选。此前 dNhmdU/L3FLyn 失败证据不改写。
+
+真实 Windows 开发/打包各三场景、原生单元 9 项及 release policy 12 项证据见下节。最终候选与原生测试生产代码相同，仅测试时限、旧错误断言及说明文档有差异。默认开发 origin 确认为 http://localhost:1420，打包 development=false；两种模式均有两代快照/SSE、五次启动失败后 UI 识别终态、桌面正常/异常退出后 Core 回收。测试使用隔离临时数据及虚拟输出，未修改用户配置和凭据。
+
+本次审查范围：Spec 对照用户确认的桌面开发入口、错误提示和耗尽后手动重开；Correctness/architecture 检查 devUrl→supervisor→Core 实例白名单、统一错误分类、快照为事实来源及旧代次防护，不改变公开 HTTP API 或数据库；Security 检查本机精确 origin、错误 token/端口/相似来源拒绝、打包清空继承设置、生产者规则保留及错误脱敏；Crash/recovery 检查持久耗尽状态、事件仅唤醒读取、停止终态轮询、刷新失败保留原因及真实进程回收。未声称解决历史运行器 IPC 不稳定，未做跨平台原生视觉、签名或发布验收。
+
+用户随后授权提交并推送。修复代码已提交为 `5b1a23fc69115c3d3a245f761eb3d20ce063004f`，提交后核对 HEAD tree 与上述候选完全一致。收尾仅修改 ISSUE_PROGRESS 与本日志的说明，经 diff 审查不含代码、测试、依赖、运行配置或构建输入，按纯文档例外单独提交并随代码推送 origin/main；复用上述代码 commit/tree 的证据，不声称文档提交 tree 与候选相同。远端 CI 待另行验证，不关闭 Issue。
+
 ## 2026-10-14 — 开发连接修复验证轮次
 
 候选 41af94d819a9495e05320373285738a277d092bf 的 L3FLyn/evidence.json：冻结安装和全部单元通过，首次真实验收在 codex-spool 启动时遇到历史运行器 ERR_IPC_CHANNEL_CLOSED，保留失败。该候选原样重跑的 retry-evidence.json 中 19 组真实 Core 全通过，但桌面 connection 验收仍期待旧英文错误字符串，漏同步为新固定错误码 UNAVAILABLE，因此整体仍记失败。更新这一条契约断言后，桌面真实 Core 崩溃重连和监督 stdin 关闭两项定向验收通过，再导出最终候选；不掩盖此前失败，不宣称运行器偶发问题已根治。
