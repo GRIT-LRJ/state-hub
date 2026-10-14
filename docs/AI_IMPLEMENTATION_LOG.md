@@ -1121,3 +1121,133 @@ PASS。03f71e6a54584936a2fd7ecbf8940ca84314a9cc；提交 tree f13aa05d600f51b075
 本轮新增修复提交为 47a9311、3325dfb、03f71e6，既有提交未改写或 squash。只把通过验证的提交及对应文档纳入推送范围；保留尚未提交的 #23/#24 工作树。GitHub Issue 没有自动关闭。原始成功和失败日志都保留在文中列出的临时目录；安装/源码树/门禁退出码与原生构建输入分开记录。文档后续提交仅更新记录，不冒称自身 tree 等于此前代码候选 tree。
 
 收尾文档候选 554dfa682f59a9c5d0a60c30611b2123d92db35c 在独立目录 G8Y91J 再次完整通过安装与四项门禁。随后仅修正文档中的职责措辞、PID 重用说明和纯文档验证范围；已检查这些说明不属于构建输入，最终文档提交复用代码提交 03f71e6 的运行证据，保留与旧完整 tree 不同的事实。
+
+## 2026-10-12 — 推送结果与用户收束范围
+
+文档提交为 68286bed2901036a6dd312ae043c28a8463a679b，已连同修复提交成功推送 main，并核对远端 HEAD 一致。CI 38221240657 的 Linux 完整门禁和性能通过；Windows 四项基础门禁及真实 Tauri 生命周期通过，但 Windows 事件性能持续约 98.28/s、突发 P95 525.02ms 未达标。
+
+随后曾扩大到新的性能专项排查，新增本地存储 probe、手动诊断 workflow 及可选 profiling 入口；这些改动均未提交、未推送，远端诊断 workflow 未运行。用户明确要求收回到 retro 修复，并说明当前只需正常启动运行，性能可以延后。因此停止性能专项，保留原始指标与本地诊断草稿，不修改阈值、不声称性能问题已经修好，也不继续占用本次修复范围。没有新建或关闭 GitHub Issue。
+
+## 2026-10-12 — 桌面六栏重构中途暂停
+
+按用户确认的 grill-with-docs 访谈结果实现：Clash Verge 风格紧凑侧栏，概览/来源/输出/规则/诊断/设置；输出与规则按次独立应用，保留跨栏未保存编辑而不捆绑提交。已补上下文索引、桌面词汇、界面设计与独立操作 ADR，并写入界面第一版及诊断解析、凭据组件。
+
+实际证据：桌面 check 在后续表单/文案改动前退出 0；桌面 test 退出 1，3 文件失败/3 文件通过，11 项失败/10 项通过。失败包含旧按钮/文案和旧统一草稿流程断言，尚未逐一迁移及审查真实缺陷。没有完整候选树、真实 Core 或本轮原生视觉验收证据，不作 PASS 声明。
+
+用户此时要求停止、明天再继续。已停止实现，正在运行的测试已自然结束；未安排自动续跑。代码和文档未提交、未推送，原有工作树修改与真实 index 保留。后续从 [UI_REDESIGN_HANDOFF.md](UI_REDESIGN_HANDOFF.md) 恢复，优先完成新流程测试、并发/异步审查及验收。自动化原生 UI 通道当时不可用，视觉验证保持未覆盖。
+
+## 2026-10-13 — 六栏 UI 重构实现与证据
+
+### 问题与最终行为
+
+原界面把接入、凭据、输出、规则、运行状态和诊断罗列在长页面。按已确认访谈结果改为固定六栏侧栏及右侧工作区，默认概览；每栏解释用途与关键字段。输出与规则各自保留未保存编辑，每次只合入、审阅、应用一个操作。输出允许独立存在，规则只引用已生效输出；配置版本回滚仍恢复整套输出与规则。
+
+来源与凭据操作立即生效，Token 只展示一次；凭据不读回、不持久化到浏览器，离开凭据编辑会清除输入。Codex/PushPlus 引导分步完成，可结束在任一步。诊断按需显示最多 500 条脱敏投递并筛选状态，保留支持包预览后导出。设置分为凭据/配置版本/关于。已有 updater 和首屏计时逻辑保留。
+
+### 文件与文档
+
+主要实现：App、ConfigManager、SourceManager、RuntimeManager、CredentialManager、Diagnostics、config-operations、config-forms、ConditionsField、runtime-management、management、app.css 和对应测试。新增 CONTEXT-MAP、桌面 CONTEXT/GLOSSARY、UI-DESIGN 与独立操作 ADR；UI-DESIGN 含六栏使用讲解。UI_REDESIGN_HANDOFF 已更新为交付状态。
+
+Core 的既有创建来源接口增加兼容的可选 `createOnly` 参数：事务内发现同名接入方即返回 409，不轮换获胜者的 Token。只有客户端先查询列表无法防止竞态，因此用这项小幅接口扩展兑现新增操作的语义；省略参数仍保留既有轮换行为。没有数据库 schema、迁移或 backfill。
+
+### 发现并修复的实际缺陷
+
+- React 19 下静态确认弹窗不可用：改用有上下文的 Modal hooks，并在断线或离开相关页时清理敏感确认流程。
+- 条件删除后复用索引导致本地文字错位：稳定行标识；切换编辑对象采用新表单会话，输出/规则有独立字段 ID 前缀。
+- 旧异步预览/发布越过导航或断线边界：加入代次检查；最后读取基线后、实际发布前再次检查，过时预览不能恢复。
+- 规则目标输出变化后无法继续：提供保留规则输入并刷新目标信息的恢复动作。
+- 检查凭据存在与失败保存会丢输入：检查保留输入，成功保存/删除才清除；错误使用安全文案。
+- 新增接入方与其他客户端并发时可能暗中轮换：服务端 createOnly 事务保护及真实 HTTP 并发测试。
+
+昨日及早期失败日志保留；最终通过不抹去失败历史。相关临时日志为 state-hub-ui-config-20261013.log、state-hub-ui-suite-20261013.log、state-hub-ui-suite-20261013-2.log；后续单独桌面测试 state-hub-ui-suite-20261013-3.log 已通过，最终以下隔离候选包含最后代码改动。
+
+### 验收覆盖与审查范围
+
+- Spec：六栏默认页/单一连接、独立保存无规则输出、跨栏编辑保留、应用规则不夹带输出编辑、分步输出结束、引用删除保护、支持包预览和诊断范围，分别由 App/ConfigManager/SourceManager/RuntimeManager/Diagnostics 测试断言。原生视觉仍未覆盖，故不宣称全部 UI 规格验收完成。
+- Correctness/architecture：静态复核一次操作合入最新配置、当前编辑基线与目标依赖冲突、发布 revision fence、独立表单状态和真实 Core 原子发布/回滚。config-operations、ConfigManager 和真实 Core config-management 验收覆盖并发/失效路径。
+- Security：复核凭据只经原生凭据 API、敏感错误脱敏、插件说明按纯文本渲染、来源 createOnly 并发保护、显式轮换/撤销确认。组件测试与真实系统凭据验收验证密钥不进入 HTTP/SQLite/支持包；本轮没有扩大网络授权或改变管理 token 边界。
+- Crash/recovery：断线保留编辑、阻断晚到的预览/发布、真实 Core 重连及进程回收；原生 smoke 验证实际 Tauri 监督重启并重新连接、启动失败五次上限和父进程异常退出后 Core 清理。未保存编辑只保留于当前进程，真正退出后不恢复是已确认行为。
+
+### 隔离候选证据
+
+使用临时 GIT_INDEX_FILE 导出完整当前工作树，未更改用户真实暂存区。tree `8edc383ec8e1dd7a81226f8b5369f4ee478ad083`，parent `68286bed2901036a6dd312ae043c28a8463a679b`；Windows x64 / Node v24.15.0。证据 `%TEMP%/state-hub-candidate-gvxmTC/evidence.json`：冻结锁文件安装、`pnpm test`、`pnpm test:acceptance`、`pnpm check`、`pnpm build` 全部 exit 0；桌面 37 项、Core 90 项单元测试通过。候选包括原有发行/性能工作树，不能将结果误归于仅 UI 的独立提交。
+
+真实 Core 全套 acceptance 通过，包含桌面配置/运行管理/连接与来源/凭据测试；另有定向结果 `%TEMP%/state-hub-ui-acceptance-20261013.log`。Windows 原生 evidence：`%TEMP%/state-hub-desktop-lifecycle-rJeLiz/results.json`，三场景 PASS，恢复 spawn 与 connected 代次均为 1、2；启动失败五次后 exhausted=true。原生构建和执行日志 `%TEMP%/state-hub-ui-native-20261013.log`。原生构建取自同一工作树代码，不冒称取自候选导出目录。
+
+随后成功构建普通非 lifecycle-smoke EXE：`apps/desktop/src-tauri/target/release/state-hub-desktop.exe`，SHA256 `87FBAC10F1463C0FD8DEAD1432C1470FAF9B752257FAD5481FCB6A9E3A002760`；日志 `%TEMP%/state-hub-ui-normal-build-20261013.log`。这是本地产物，没有创建新安装包、签名或替换已安装版本。
+
+真实 index SHA256 前后一致：`BCCF6F0EFAC48955314432F2FE1269C3DB9A4EA2B5D294FF981F934C44F7687A`。验证后只修改 UI-DESIGN、UI_REDESIGN_HANDOFF、ISSUE_PROGRESS、AI_IMPLEMENTATION_LOG 四份说明文档；依据 VALIDATION 的文档收尾规则复用代码结果，最终文档 tree 不等同于已验证 tree。
+
+### 剩余边界与最终状态
+
+实现及自动化验证完成；原生视觉未验收。computer-use 原生管道不可用，cua enabled surfaces 为空，不能声称已逐按钮点击或验证默认/最小窗口、缩放和长名称。构建保留 chunk 大小警告，本次没有测试启动性能或宣称解决 #22/#23/#24 的既有问题。未提交、未推送、未新建或关闭 GitHub Issue。
+
+## 2026-10-13 — 根目录 npm run dev 一键启动
+
+用户希望每次改代码后只运行一条命令。根 package.json 增加 dev 脚本，串行执行 `pnpm install --frozen-lockfile && pnpm build:sidecar && pnpm --filter @state-hub/desktop tauri dev`。复用已有打包和 Tauri 监督机制，自动构建共享包/Core，再启动 Vite、桌面和 Core；任何准备步骤失败就停止，不另起无管理授权的 Core，也不手工创建长期管理 token。底层仍用 pnpm workspace，不引入 package-lock、额外依赖或第二套进程监督。README 和 OPERATIONS 已说明依赖工具链、首次编译、界面热更新、Rust 自动重编译、Core/共享包修改后 Ctrl+C 再运行同一命令。没有数据库或配置结构变化。
+
+实际 Windows 验证使用临时 STATE_HUB_DATA_DIR / STATE_HUB_RUNTIME_DIR，不操作用户配置和密钥。两次从根目录真实执行 npm run dev，均完成 sidecar 构建并启动 target/debug/state-hub-desktop.exe 与受监督 Core；Core /health/live 返回 ok。第二次绕过本机 HTTP 代理后 Vite 返回 200，startup metrics 收到 uiFirstPaintMs 与 coreReadyMs。第一次 PowerShell HTTP 检查经本机代理返回 502，原始记录保留；第二次 -NoProxy 检查成功，不把代理响应当产品失败。证据目录 `%TEMP%/state-hub-dev-5caad71192704a5c8be55848ce63d09b/`：startup-evidence.json、shutdown-evidence.json、restart-evidence.json、restart-shutdown-evidence.json、startup-metrics.json。两次 Ctrl+C 均验证桌面和 Core 不再存活、1420 无监听；Windows 控制台显示 STATUS_CONTROL_C_EXIT 是主动中断结果。测试已停止，没有遗留开发实例。
+
+隔离候选 tree `26b333184b0e75626f645e7d168afaf294320938`，parent `68286bed2901036a6dd312ae043c28a8463a679b`；`%TEMP%/state-hub-candidate-VmtleP/evidence.json` 记录冻结安装与 pnpm test exit 0，首次 test:acceptance 在首个 append-only-delivery worker 报 ERR_IPC_CHANNEL_CLOSED、exit 1，后续检查未运行。保留该 FAIL 与日志，不推断这次脚本改动导致或修复了此前已经记录的 Windows IPC 偶发问题。
+
+未修改导出 checkout，在同一候选重跑完整 test:acceptance，并继续 check/build，三项全部 exit 0；`retry-evidence.json` 记录每项命令、时间、退出码和日志，并引用原安装/unit 成功证据。不重复已通过的 unit，也不改写原 evidence 为 PASS。最终四项基础门禁都有该代码 tree 的成功结果，但不是第一次整套运行通过。验证后仅收尾 ISSUE_PROGRESS 与 AI_IMPLEMENTATION_LOG 两份说明文档，代码/依赖/测试/构建输入未变化，真实 index 未改动。
+
+检查范围：Spec 为根目录单命令启动和修改后重启路径；Correctness 为准备顺序、失败短路和继续复用已有 pnpm/Tauri 机制；Security 为无新 token 保存或权限边界变化、测试数据隔离；Recovery 为实际 Ctrl+C 清理与再次启动。热更新机制沿用现有 Vite/Tauri 配置；未逐像素检查窗口，不外推跨平台安装、升级或启动性能。本次改动仅一条可逆脚本与运行说明，采用真实命令验证，没有新增只复述脚本字符串的测试。未提交、未推送、未关闭 Issue；既有 UI、发行和性能修改保留。
+
+
+## 2026-10-14 — 分批提交：性能诊断工具
+
+仅提交手动诊断 workflow、临时 SQLite 持久化对照工具和可选 CPU profile 接线。node --check 与 YAML 解析通过；未运行额外性能专项，不更改阈值或 SQLite 生产配置。Spec/Correctness/Security/Recovery 检查限于手动触发、诊断隔离、临时目录清理及默认路径行为保持不变。
+
+候选 tree `74e0810365c5e748983af330c1389b7d4b6c90b2`，parent `68286bed2901036a6dd312ae043c28a8463a679b`；证据 `C:\Users\GRIT-LRJ\AppData\Local\Temp\state-hub-candidate-4MoXxR\evidence.json`。冻结安装和 test/test:acceptance/check/build 全部 exit 0；提交前核对 index tree 未变化，提交后再核对 commit tree。本次用户明确授权按功能提交和推送，验证范围为该批代码基础门禁，不等于跨平台发行或性能验收；不关闭 Issue。
+
+
+## 2026-10-14 — 分批提交：打包、更新和发行门禁基础设施
+
+提交独立的原生打包/更新/签名候选工具、手动 workflow、首屏计时和更新入口。隔离 release tests 11/11；相同 Rust 源码工作树测试 7/7；JS/PowerShell/bash 与 YAML 语法检查通过。Spec 仅完成基础设施，三平台真实发行、正式签名和启动性能验收仍不完整；Correctness/Security 审查配置缺失拒绝、HTTPS/签名/版本检查、测试 feature 隔离；Recovery 复用此前本地原生证据，不声称重新验收所有安装平台。
+
+候选 tree `3724b4401cf41cbffa50e07f11d36cc589c09eb8`，parent `54dadbdca141c3ba3986faf70e318eb4bbfc265c`；证据 `C:\Users\GRIT-LRJ\AppData\Local\Temp\state-hub-candidate-oDdtat\evidence.json`。冻结安装和 test/test:acceptance/check/build 全部 exit 0；提交前核对 index tree 未变化，提交后再核对 commit tree。本次用户明确授权按功能提交和推送，验证范围为该批代码基础门禁，不等于跨平台发行或性能验收；不关闭 Issue。
+
+## 2026-10-14 — 分批推送后的首轮 CI 边界
+
+提交 54dadbd 的 GitHub Actions 运行 38507113118：Linux verify 成功；Windows pnpm verify 成功，但 test:performance 的持续速率未达 100/s；desktop-lifecycle 在 inspectWindowsCore 的 PowerShell 进程查询中报 spawnSync powershell.exe ETIMEDOUT。该 CI 运行失败，不能用本地候选门禁成功覆盖。此次没有改动生命周期 smoke runner，超时原因尚未确定，不断言是产品进程未退出，也不宣称已修复。既有 Windows 性能问题仍按用户决定延后，没有降低阈值或增加专项排查。
+
+本次授权是按功能提交并推送现有实现，不是正式发布或关闭 Issue。#23/#24 的基础设施现已提交，历史表中的 Can commit NO 改为基础设施已提交、发行验收仍未通过；性能、签名、公证、跨平台和视觉证据缺口继续保留。#16 既有本地原生证据仍是限定版本与环境的历史结果，新推送的 CI 生命周期结果单独记为未通过。
+
+
+## 2026-10-14 — 分批提交：六栏 UI 与独立配置操作
+
+提交六栏导航、独立输出/规则编辑与应用、来源/凭据管理、诊断、中文说明和设计/术语/ADR 文档，以及 createOnly 来源并发保护。桌面 37 项及 Core 90 项单元测试通过；真实 Core 配置/凭据/连接验收通过。Spec、Correctness、Security、Recovery 覆盖范围沿用 2026-10-13 的详细审查，并以本次拆分后完整候选重新验证基础门禁；原生视觉仍未验收，Windows CI 生命周期超时另行记录，不将其列为通过。
+
+候选 tree `f153797a1de11b77e94d78778173a7ccff717972`，parent `9d97da1211f26a848b9ff9f2c82aefca9e8ebb2e`；证据 `C:\Users\GRIT-LRJ\AppData\Local\Temp\state-hub-candidate-1S7LQ2\evidence.json`。冻结安装和 test/test:acceptance/check/build 全部 exit 0；提交前核对 index tree 未变化，提交后再核对 commit tree。本次用户明确授权按功能提交和推送，验证范围为该批代码基础门禁，不等于跨平台发行或性能验收；不关闭 Issue。
+
+## 2026-10-14 — 一键启动提交候选的测试超时
+
+候选 tree a0953e7e18ce3402563e6675e026ce76a8dd969f 首次验证 `%TEMP%/state-hub-candidate-wXN2Gg/evidence.json` 在 pnpm test 失败：ConfigManager 的跨栏保留并独立应用规则/输出多步骤用例耗时约 5700ms，超过 Vitest 默认 5000ms，36/37 项通过。该测试源码与此前已通过的 UI 候选 f153797a 相同；本轮 dev 改动只有脚本和运行说明。保留失败，不将其归因于已证实的产品缺陷，也不宣称已修复。随后对同一暂存 tree 重新执行完整候选验证，没有修改代码、断言或测试时限；结果在该批最终提交记录中另列。
+
+第二批发布基础设施提交 9d97da1 的 CI 38507554772 同样为 Linux verify 成功、Windows verify 的性能阶段失败、desktop-lifecycle 的 PowerShell 进程检查超时。两个远端运行均不标为通过；本地 Rust/基础门禁与远端生命周期结果保持分开。
+
+## 2026-10-14 — 多步骤界面回归的单用例时限
+
+同一候选 a0953e7e 在第二个干净目录 `%TEMP%/state-hub-candidate-ry4KmQ/` 再次仅因同一用例 5745ms 超过默认 5000ms 而失败；没有通过重试把两次失败隐去。该用例串行执行两个完整 schema 表单流程，属于正确性断言，不是产品延迟门禁。因此只把这个用例的执行上限设置为 15000ms，并添加原因注释，其他测试和所有产品性能阈值保持不变。全部业务断言保留。定向重跑在约 6909ms 完成并通过，证明其完成路径需要超过 5 秒；不能宣称解决了产品性能问题。
+
+这项小型测试运行修正与一键启动一起归入开发流程批次，提交标题和范围明确包含它。随后重新暂存并运行完整候选验证，最终 tree 与结果由该批记录给出；不复用此前失败候选的 PASS。
+
+
+## 2026-10-14 — 分批提交：一键启动与开发回归流程
+
+提交根目录 npm run dev、README/运行说明，并为跨栏两轮表单操作的单个正确性测试设置 15 秒执行时限，保留所有断言。初始同一用例两次 5 秒超时记录保留；修正后定向及全套候选验证通过。Spec/Correctness 为顺序准备依赖、失败短路、复用既有桌面监督和启动路径；Security 无新管理 token 或持久凭据；Recovery 复用 2026-10-13 同一启动命令的两次真实启动/退出证据，不修改产品性能门禁。
+
+候选 tree `347c783194cedba84a0cb0908ff67c50aa1fb429`，parent `6c454ebf545c53ab0376b4b117230953909990d7`；证据 `C:\Users\GRIT-LRJ\AppData\Local\Temp\state-hub-candidate-BiyUQE\evidence.json`。冻结安装和 test/test:acceptance/check/build 全部 exit 0；提交前核对 index tree 未变化，提交后再核对 commit tree。本次用户明确授权按功能提交和推送，验证范围为该批代码基础门禁，不等于跨平台发行或性能验收；不关闭 Issue。
+
+
+## 2026-10-14 — 提交汇总与文档收尾
+
+- 54dadbd chore(perf): add opt-in Windows storage and CPU diagnostics
+- 9d97da1 feat(release): add native packaging, updater and signed candidate gates
+- 6c454eb feat(desktop): add six-section navigation and independent configuration editing
+- d6f4253 chore(dev): add one-command startup and stabilize multi-step UI regression
+
+四批代码分别提交并普通 fast-forward 推送到 origin/main；逐个核对提交 tree 等于该批 evidence tree，没有改写旧提交或强制推送。最终代码提交 d6f4253978912bf0842f9576048e762bfaa286d8 之后只更新 ISSUE_PROGRESS、AI_IMPLEMENTATION_LOG、UI_REDESIGN_HANDOFF 三份说明文档，引用已验证代码结果，不冒称文档 tree 相同。进度表 #1/#22/#23/#24 的非 PASS 状态未改为 PASS；由于 stable-policy 读取该表，文档收尾额外检查 release tests 和 stable gate 继续拒绝当前未完成验收状态。
+
+最新已完成的远程 CI 38508006405（6c454eb）：Linux verify 和 Windows 真实生命周期通过；Windows pnpm verify 成功，但后续性能测试发生 ECONNREFUSED，任务失败。此前两轮生命周期查询超时保留，不能用新一次通过抹去；没有根因修复结论。最终提交的远程 CI 将另行产生，不将推送成功表述为 CI 全绿。
