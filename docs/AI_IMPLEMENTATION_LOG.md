@@ -1284,3 +1284,10 @@ Core 的既有创建来源接口增加兼容的可选 `createOnly` 参数：事�
 提交前再次读取 VALIDATION、核对 index tree，按当前用户授权提交和推送。远端 CI 待运行结果，不关闭 Issue，不发布 stable。
 
 代码提交 `21c63322646a9d65ad78d212387e1109b3de6d0a` 的 tree 与上述候选证据一致；后续仅这两份进度/日志文档补记结果，复用该代码证据，不声称文档 tree 相同。
+
+
+## 2026-10-14 — 远端功能 CI 全部通过
+
+GitHub Actions [38513301287](https://github.com/GRIT-LRJ/state-hub/actions/runs/38513301287)，提交 `15f1692afe5069e7d0d3454d6d10c6377fbfc5f3`（功能/CI 修复代码 `21c63322646a9d65ad78d212387e1109b3de6d0a`）：Windows verify、Linux verify、Windows desktop-lifecycle 三个任务均 success。该结论按用户修订后的功能标准成立，不表示旧 100ms/100/s/1s 性能目标达标。历史失败与未完成的三平台正式发行仍保留。
+
+后续本次收尾仅修改 ISSUE_PROGRESS、AI_IMPLEMENTATION_LOG 两份说明文档，引用已验证代码和上述 CI；不改变程序、workflow、依赖、测试或进度表的验收状态。按 VALIDATION 的纯文档例外复用准确代码候选与远端证据，并检查 stable policy 仍拒绝当前未完成的 #1。Issue #1/#22 同步附上此结果，#22 保持 open/needs-info/DEFERRED。
