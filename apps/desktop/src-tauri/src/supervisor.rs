@@ -29,6 +29,30 @@ pub(crate) struct CoreState {
     child: Mutex<Option<CommandChild>>,
     stopping: AtomicBool,
     generation: AtomicU64,
+    exhausted: AtomicBool,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub(crate) enum ConnectionError {
+    #[serde(rename = "CORE_STARTING")]
+    Starting,
+    #[serde(rename = "CORE_RESTART_EXHAUSTED")]
+    Exhausted,
+    #[serde(rename = "CORE_INTERNAL_ERROR")]
+    Internal,
+}
+
+impl CoreState {
+    pub(crate) fn current_connection(&self) -> Result<CoreConnection, ConnectionError> {
+        let connection = self.connection.lock().map_err(|_| ConnectionError::Internal)?;
+        if self.exhausted.load(Ordering::SeqCst) { return Err(ConnectionError::Exhausted); }
+        connection.clone().ok_or(ConnectionError::Starting)
+    }
+}
+
+fn desktop_dev_origin(is_dev: bool, dev_url: Option<&tauri::Url>) -> String {
+    if is_dev { dev_url.map(|url| url.origin().ascii_serialization()).unwrap_or_default() }
+    else { String::new() }
 }
 
 #[derive(Default)]
@@ -70,13 +94,8 @@ fn ready_port(bytes: &[u8], expected_pid: u32) -> Option<u16> {
 #[tauri::command]
 pub(crate) fn core_connection(
     state: tauri::State<'_, CoreState>,
-) -> Result<CoreConnection, String> {
-    state
-        .connection
-        .lock()
-        .map_err(|_| "Core state lock is poisoned".to_string())?
-        .clone()
-        .ok_or_else(|| "Core is still starting".to_string())
+) -> Result<CoreConnection, ConnectionError> {
+    state.current_connection()
 }
 
 pub(crate) fn shutdown_core(app: &AppHandle) {
@@ -98,6 +117,7 @@ pub(crate) fn start_supervisor(app: AppHandle) {
 
 async fn supervise(app: AppHandle) {
     let mut budget = RestartBudget::default();
+    let dev_origin = desktop_dev_origin(tauri::is_dev(), app.config().build.dev_url.as_ref());
     loop {
         let state = app.state::<CoreState>();
         if state.stopping.load(Ordering::SeqCst) {
@@ -110,6 +130,8 @@ async fn supervise(app: AppHandle) {
             command
                 .env("STATE_HUB_ADMIN_TOKEN", &token)
                 .env("STATE_HUB_SUPERVISED", "1")
+                // Explicitly clear inherited development settings in packaged builds.
+                .env("STATE_HUB_DESKTOP_DEV_ORIGIN", &dev_origin)
                 .spawn()
         });
         match spawned {
@@ -214,6 +236,7 @@ async fn supervise(app: AppHandle) {
         match budget.after_failure(started.elapsed()) {
             Some(delay) => tokio::time::sleep(delay).await,
             None => {
+                state.exhausted.store(true, Ordering::SeqCst);
                 let _ = app.emit(
                     "core-restart-exhausted",
                     serde_json::json!({ "attempts": MAX_CONSECUTIVE_FAILURES }),
@@ -236,8 +259,26 @@ pub(crate) fn crash_for_smoke(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ready_port, RestartBudget};
+    use super::{desktop_dev_origin, ready_port, ConnectionError, CoreState, RestartBudget};
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
+
+    #[test]
+    fn development_origin_follows_resource_mode_not_debug_profile() {
+        let url = tauri::Url::parse("http://localhost:1420/some/page").unwrap();
+        assert_eq!(desktop_dev_origin(true, Some(&url)), "http://localhost:1420");
+        assert_eq!(desktop_dev_origin(false, Some(&url)), "");
+        assert_eq!(desktop_dev_origin(true, None), "");
+    }
+
+    #[test]
+    fn exhaustion_is_readable_after_the_event_has_been_missed() {
+        let state = CoreState::default();
+        assert!(matches!(state.current_connection(), Err(ConnectionError::Starting)));
+        state.exhausted.store(true, Ordering::SeqCst);
+        assert!(matches!(state.current_connection(), Err(ConnectionError::Exhausted)));
+        assert_eq!(serde_json::to_string(&ConnectionError::Exhausted).unwrap(), "\"CORE_RESTART_EXHAUSTED\"");
+    }
 
     #[test]
     fn limits_start_failures_and_resets_after_a_stable_run() {

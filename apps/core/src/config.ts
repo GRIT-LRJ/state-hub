@@ -15,6 +15,7 @@ export interface CoreConfig {
   retentionIntervalMs: number;
   adminToken: string;
   pluginDevelopmentMode: boolean;
+  desktopDevOrigin?: string;
   bootstrapProducerId?: string;
   bootstrapProducerToken?: string;
 }
@@ -63,9 +64,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     retentionIntervalMs,
     adminToken,
     pluginDevelopmentMode: env.STATE_HUB_PLUGIN_DEVELOPMENT_MODE === "true",
+    ...(env.STATE_HUB_DESKTOP_DEV_ORIGIN
+      ? { desktopDevOrigin: validateDesktopDevOrigin(env.STATE_HUB_DESKTOP_DEV_ORIGIN) } : {}),
     ...(env.STATE_HUB_BOOTSTRAP_PRODUCER_ID
       ? { bootstrapProducerId: env.STATE_HUB_BOOTSTRAP_PRODUCER_ID }
       : {}),
     ...(env.STATE_HUB_BOOTSTRAP_TOKEN ? { bootstrapProducerToken: env.STATE_HUB_BOOTSTRAP_TOKEN } : {}),
   };
+}
+
+export function validateDesktopDevOrigin(value: string): string {
+  try {
+    const url = new URL(value);
+    if (["http:", "https:"].includes(url.protocol) &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&
+      url.origin === value && !url.username && !url.password) return value;
+  } catch { /* Never include untrusted configuration in the error. */ }
+  throw new Error("INVALID_DESKTOP_DEV_ORIGIN");
 }

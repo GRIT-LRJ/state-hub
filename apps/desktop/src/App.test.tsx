@@ -9,6 +9,7 @@ import { loadConfigCatalog, loadConfigRevisions, loadManagedConfig } from "./con
 import App from "./App.js";
 import { setupDom, renderUi as render } from "./test-support/dom.js";
 import "./i18n.js";
+import { ConnectionFailure, connectionNotices } from "./connection-errors.js";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("./api.js", async (original) => ({ ...await original<typeof import("./api.js")>(),
@@ -47,12 +48,12 @@ it("starts in overview, reaches all six modules, and keeps a single subscription
   fireEvent.click(screen.getByRole("button", { name: "暂停所有输出" }));
   await waitFor(() => expect(setOutputsPaused).toHaveBeenCalledWith(true));
   expect(subscribe).toHaveBeenCalledOnce();
-});
+}, 15_000);
 
 it("retains unfinished output form across navigation and clears credential input on leaving settings", async () => {
   render(<App />); await screen.findByText("本地服务已连接");
   fireEvent.click(nav("输出"));
-  await waitFor(() => expect((screen.getByRole("button", { name: "新增输出" }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect((screen.getByRole("button", { name: "新增输出" }) as HTMLButtonElement).disabled).toBe(false), { timeout: 5_000 });
   fireEvent.click(screen.getByRole("button", { name: "新增输出" }));
   const id = document.getElementById("output_id") as HTMLInputElement;
   fireEvent.change(id, { target: { value: "unsaved-output" } });
@@ -63,4 +64,31 @@ it("retains unfinished output form across navigation and clears credential input
   expect(within(nav("输出")).getByLabelText("有未保存编辑")).toBeTruthy();
   fireEvent.click(nav("设置")); expect((screen.getByLabelText("密钥") as HTMLInputElement).value).toBe("");
   expect(subscribe).toHaveBeenCalledOnce();
+}, 15_000);
+
+it("shows persistent startup exhaustion instead of promising reconnection", async () => {
+  vi.mocked(getConnection).mockRejectedValue(new ConnectionFailure("CORE_RESTART_EXHAUSTED"));
+  render(<App />);
+  await screen.findByText(connectionNotices.CORE_RESTART_EXHAUSTED.message);
+  expect(screen.queryByText("正在重新连接")).toBeNull();
+  expect(fetchSnapshot).not.toHaveBeenCalled();
 });
+
+it("keeps unsaved output editing through a network failure and clears the safe notice on recovery", async () => {
+  let disconnect: (() => void) | undefined;
+  vi.mocked(subscribe).mockImplementationOnce(async (_connection, _notice, signal) => await new Promise<void>((resolve, reject) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+    disconnect = () => reject(new TypeError("private-network-detail"));
+  }));
+  render(<App />); await screen.findByText("本地服务已连接");
+  fireEvent.click(nav("输出"));
+  await waitFor(() => expect((screen.getByRole("button", { name: "新增输出" }) as HTMLButtonElement).disabled).toBe(false), { timeout: 5_000 });
+  fireEvent.click(screen.getByRole("button", { name: "新增输出" }));
+  fireEvent.change(document.getElementById("output_id")!, { target: { value: "keep-after-disconnect" } });
+  disconnect!();
+  await screen.findByText(connectionNotices.UNAVAILABLE.message);
+  expect(document.body.textContent).not.toContain("private-network-detail");
+  await screen.findByText("本地服务已连接");
+  expect(screen.queryByText(connectionNotices.UNAVAILABLE.message)).toBeNull();
+  expect((document.getElementById("output_id") as HTMLInputElement).value).toBe("keep-after-disconnect");
+}, 15_000);

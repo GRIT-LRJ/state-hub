@@ -1,7 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mergeCodexVirtual, subscribe, type CoreConnection } from "./api.js";
+import { fetchSnapshot, getConnection, mergeCodexVirtual, subscribe, type CoreConnection } from "./api.js";
+import { invoke } from "@tauri-apps/api/core";
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 afterEach(() => vi.unstubAllGlobals());
+
+it.each([401, 403, 500])("classifies readable HTTP %s for both snapshot and subscription without exposing bodies", async (status) => {
+  const connection = { endpoint: "http://127.0.0.1:41000", adminToken: "secret", generation: 1 };
+  vi.stubGlobal("fetch", vi.fn(async () => new Response("private server detail", { status })));
+  const code = status === 401 ? "UNAUTHORIZED" : status === 403 ? "FORBIDDEN" : "UNAVAILABLE";
+  await expect(fetchSnapshot(connection)).rejects.toMatchObject({ code, message: code });
+  await expect(subscribe(connection, () => undefined, new AbortController().signal)).rejects.toMatchObject({ code, message: code });
+});
+
+it.each(["CORE_STARTING", "CORE_RESTART_EXHAUSTED", "CORE_INTERNAL_ERROR", "private native detail"])
+  ("maps only known native codes: %s", async (nativeError) => {
+    vi.mocked(invoke).mockRejectedValueOnce(nativeError);
+    const code = nativeError.startsWith("CORE_") ? nativeError : "UNAVAILABLE";
+    await expect(getConnection()).rejects.toMatchObject({ code, message: code });
+  });
 
 describe("desktop SSE notice parser", () => {
   it("refreshes for initial snapshot and later events, ignoring heartbeats and data text", async () => {

@@ -1,4 +1,5 @@
 import type { CoreConnection } from "./api.js";
+import { connectionIssue, terminalConnectionIssue, type ConnectionIssue } from "./connection-errors.js";
 
 export interface CoreTransport<Snapshot> {
   connection(): Promise<CoreConnection>;
@@ -8,7 +9,7 @@ export interface CoreTransport<Snapshot> {
 
 export interface ConnectionObserver<Snapshot> {
   snapshot(value: Snapshot | undefined): void;
-  error(message: string | undefined): void;
+  error(message: ConnectionIssue | undefined): void;
 }
 
 export class CoreConnectionLoop<Snapshot> {
@@ -57,6 +58,7 @@ export class CoreConnectionLoop<Snapshot> {
       const abortCycle = () => cycle.abort();
       stop.addEventListener("abort", abortCycle, { once: true });
       let connectedAt = 0;
+      let issue: ConnectionIssue = "UNAVAILABLE";
       try {
         const connection = await this.transport.connection();
         if (cycle.signal.aborted) continue;
@@ -81,7 +83,8 @@ export class CoreConnectionLoop<Snapshot> {
               try {
                 const latest = await this.transport.snapshot(connection, cycle.signal);
                 if (!cycle.signal.aborted) this.observer.snapshot(latest);
-              } catch {
+              } catch (error) {
+                if (!cycle.signal.aborted) issue = connectionIssue(error);
                 cycle.abort();
               }
             }
@@ -90,8 +93,9 @@ export class CoreConnectionLoop<Snapshot> {
         };
         await this.transport.subscribe(connection, this.#queueRefresh, cycle.signal);
         if (!cycle.signal.aborted) throw new Error("SSE_ENDED");
-      } catch {
-        // Only the safe connection category is shown. Network and sidecar error bodies are untrusted.
+      } catch (error) {
+        // An aborted subscription must not overwrite the cause of a failed refresh.
+        if (!cycle.signal.aborted) issue = connectionIssue(error);
       } finally {
         cycle.abort();
         stop.removeEventListener("abort", abortCycle);
@@ -99,28 +103,28 @@ export class CoreConnectionLoop<Snapshot> {
         this.#queueRefresh = undefined;
         if (!stop.aborted) {
           this.observer.snapshot(undefined);
-          this.observer.error("Core connection unavailable");
+          this.observer.error(issue);
         }
       }
       if (stop.aborted) break;
       if (connectedAt && Date.now() - connectedAt >= 10_000) failures = 0;
       failures += 1;
       const delay = Math.min(250 * 2 ** Math.min(failures - 1, 4), 4_000);
-      if (this.#immediate) this.#immediate = false;
-      else await this.wait(delay, stop);
+      if (!this.#immediate) await this.wait(terminalConnectionIssue(issue) ? undefined : delay, stop);
+      this.#immediate = false;
     }
   }
 
-  private async wait(delay: number, stop: AbortSignal): Promise<void> {
+  private async wait(delay: number | undefined, stop: AbortSignal): Promise<void> {
     await new Promise<void>((resolve) => {
-      let timer: ReturnType<typeof setTimeout>;
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const done = () => {
         clearTimeout(timer);
         stop.removeEventListener("abort", done);
         if (this.#wake === done) this.#wake = undefined;
         resolve();
       };
-      timer = setTimeout(done, delay);
+      if (delay !== undefined) timer = setTimeout(done, delay);
       this.#wake = done;
       stop.addEventListener("abort", done, { once: true });
     });

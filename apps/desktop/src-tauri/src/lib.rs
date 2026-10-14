@@ -93,6 +93,7 @@ pub fn run_from_process_entry(started: Instant) {
         .invoke_handler(tauri::generate_handler![
             supervisor::core_connection,
             lifecycle_smoke::record_connection,
+            lifecycle_smoke::record_connection_failure,
             credentials::store_secret,
             credentials::secret_status,
             credentials::delete_secret,

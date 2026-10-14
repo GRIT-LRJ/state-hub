@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import { validateDesktopDevOrigin } from "./config.js";
 import { stableStringify } from "@state-hub/domain";
 import type { Binding, OccurrenceEventInput, StateClaimInput } from "@state-hub/protocol";
 import { claimInputSchema, occurrenceInputSchema } from "@state-hub/protocol";
@@ -17,6 +18,7 @@ interface ServerOptions {
   drivers: DriverRegistry;
   dispatcher: DeliveryDispatcher;
   adminToken: string;
+  desktopDevOrigin?: string;
   plugins?: PluginRepository;
   pluginRuntime?: PluginRuntime;
   onUpgradeCommitted?: () => void;
@@ -42,9 +44,9 @@ const idParamsSchema = {
   },
 } as const;
 
-const desktopOrigins = new Set(["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"]);
-
 export function createServer(options: ServerOptions): FastifyInstance {
+  const desktopOrigins = new Set(["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"]);
+  if (options.desktopDevOrigin) desktopOrigins.add(validateDesktopDevOrigin(options.desktopDevOrigin));
   const app = Fastify({ logger: false, bodyLimit: 1_048_576, trustProxy: false });
   const plugins = options.plugins ?? new PluginRepository(options.service.db);
   // Browser preflights have no bearer token. They permit transport only; every

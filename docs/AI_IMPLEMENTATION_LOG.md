@@ -1,5 +1,21 @@
 # AI 施工日志
 
+## 2026-10-14 — 开发连接修复验证轮次
+
+候选 41af94d819a9495e05320373285738a277d092bf 的 L3FLyn/evidence.json：冻结安装和全部单元通过，首次真实验收在 codex-spool 启动时遇到历史运行器 ERR_IPC_CHANNEL_CLOSED，保留失败。该候选原样重跑的 retry-evidence.json 中 19 组真实 Core 全通过，但桌面 connection 验收仍期待旧英文错误字符串，漏同步为新固定错误码 UNAVAILABLE，因此整体仍记失败。更新这一条契约断言后，桌面真实 Core 崩溃重连和监督 stdin 关闭两项定向验收通过，再导出最终候选；不掩盖此前失败，不宣称运行器偶发问题已根治。
+
+候选 474f9925c53f342ebdf022b6993f0c23b50e5e66 的 `%TEMP%/state-hub-candidate-dNhmdU/evidence.json` 保留 FAIL：冻结安装成功，pnpm test 中 ConfigManager 两条既有复杂表单用例超过默认 5 秒，未进入后续门禁。原生编译结束后在同一未修改候选 checkout 单独重跑仍超时（state-hub-dev-fix-existing-ui-isolated.log），故仅将这两条用例上限改为 15 秒，全部操作和断言保留，再验证新候选。
+
+上述候选对应的生产代码已完成 Windows 真实原生验证：开发资源模式 `%TEMP%/state-hub-desktop-lifecycle-xIGdox/results.json` 与打包资源模式 `%TEMP%/state-hub-desktop-lifecycle-MGGFWW/results.json`，各三场景通过；记录 development=true/false、实际页面来源、连接代次 1/2、前端已识别耗尽以及每个 Core PID 的退出。开发使用默认 localhost:1420。打包运行时故意继承开发来源环境变量，仍由 supervisor 清空。原生单元 9/9、release policy 12/12。测试时限后续修改不改变上述生产代码；完整候选新结果单独记录。
+
+## 2026-10-14 — 开发窗口 Core 连接与安全错误提示（实施）
+
+根因：Tauri 开发窗口来自 devUrl，但 Core 固定白名单仅含打包来源；OPTIONS 返回 PREFLIGHT_FORBIDDEN。真实 Core 回归开发模式先失败（403 != 204），实现显式开发来源传递后通过；默认及打包来源授权边界保留。原生使用 tauri::is_dev() 区分资源模式，不能用 debug profile 判断。
+
+同时修复恢复耗尽仍永久显示重连：CoreState 持久保存终态，IPC 返回固定错误码；快照、刷新、订阅统一安全分类，终态停止定时重试，事件触发重新读取。通用 fetch 错误不猜测 CORS，错误正文和凭据不展示。新增回归先复现耗尽后仍重试及刷新原因丢失，再修复转绿。
+
+真实桌面验收增补开发资源模式、实际页面 origin、界面观察耗尽的证据；启动失败验收必须等前端回执，避免只证明 Rust 发出事件。现有用户开发实例最初占用端口和 debug sidecar，原生 debug 测试因文件占用失败；用户关闭窗口并授权直接测试后，确认仍在托盘，结束已核对的旧开发进程树，使用临时数据验收。既有 App 多步骤测试遇到默认 5 秒/等待 1 秒超时，保留全部断言并改为 15 秒用例/5 秒按钮等待上限后四项界面回归通过，不将超时当作产品性能目标。完整候选和原生结果随后补记。
+
 本轮从已有工作树继续实施。PASS 指所注明范围内的本地规格、正确性、架构、安全审查和四项基础门禁通过。历史阶段仅保留本地提交；2026-10-12 用户已授权经测试后推送，远端结果与本地验收分别核对。
 
 2026-10-12 补充：末尾“已提交版本结案核验”记录了在干净 checkout 上发现的新阻断。历史 PASS 表示当时的实际测试和审查结论；当前结案状态以 `ISSUE_PROGRESS.md` 的最新复核为准。

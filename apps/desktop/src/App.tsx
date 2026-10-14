@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { fetchSnapshot, getConnection, setOutputsPaused, subscribe, type RuntimeSnapshot } from "./api.js";
 import { CoreConnectionLoop } from "./connection-loop.js";
+import { connectionNotices, type ConnectionIssue } from "./connection-errors.js";
 import { SourceManager } from "./SourceManager.js";
 import { RuntimeManager } from "./RuntimeManager.js";
 import { Diagnostics } from "./Diagnostics.js";
@@ -35,7 +36,7 @@ export default function App() {
   const [configSection, setConfigSection] = useState<ConfigSection>("outputs");
   const [dirty, setDirty] = useState({ output: false, rule: false });
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<ConnectionIssue>();
   const [pauseError, setPauseError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [updateBusy, setUpdateBusy] = useState(false);
@@ -71,11 +72,16 @@ export default function App() {
         if (disposed) unlisten(); else listeners.push(unlisten);
       }).catch(() => undefined);
     };
-    register("core-ready"); register("core-terminated"); loop.start();
+    register("core-ready"); register("core-terminated"); register("core-restart-exhausted"); loop.start();
     return () => { disposed = true; listeners.forEach((unlisten) => unlisten());
       if (connectionLoop.current === loop) connectionLoop.current = null;
       void loop.stop(); };
   }, []);
+  useEffect(() => {
+    if (error === "CORE_RESTART_EXHAUSTED" && import.meta.env.VITE_STATE_HUB_LIFECYCLE_SMOKE === "1") {
+      void invoke("record_connection_failure", { code: error, origin: location.origin }).catch(() => undefined);
+    }
+  }, [error]);
   const togglePause = async () => {
     if (!snapshot) return;
     setBusy(true); setPauseError(false);
@@ -110,7 +116,7 @@ export default function App() {
             <span className="dirty-dot" title="有未保存编辑" aria-label="有未保存编辑" />}
         </button>)}</nav>
         <div className="sidebar-status"><span className={`status-dot ${snapshot ? "online" : ""}`} />
-          {snapshot ? "本地服务已连接" : error ? "正在重新连接" : "正在连接"}
+          {snapshot ? "本地服务已连接" : error ? connectionNotices[error].status : "正在连接"}
           <small>配置与状态保存在本机</small></div>
       </aside>
       <div className="main-shell">
@@ -120,7 +126,7 @@ export default function App() {
             loading={busy} disabled={!snapshot} onClick={() => void togglePause()}>
             {snapshot?.outputsPaused ? t("resumeOutputs") : t("pauseOutputs")}</Button></header>
         <div className="global-notices" aria-live="polite">
-          {error && <Alert type="warning" showIcon message="正在重新连接本地服务；未保存的编辑会保留。" />}
+          {error && <Alert type="warning" showIcon message={connectionNotices[error].message} />}
           {pauseError && <Alert type="error" showIcon message={t("pauseFailed")} />}
           {snapshot?.outputsPaused && <Alert type="warning" showIcon message="输出已暂停，输入仍在更新。恢复时重算当前状态，不补发暂停期间被抑制的事件。" />}
         </div>

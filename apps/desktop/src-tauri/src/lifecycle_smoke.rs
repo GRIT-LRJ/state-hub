@@ -1,10 +1,18 @@
 // The command is harmless in production; process fault injection only exists in explicit smoke builds.
 #[tauri::command]
-pub(crate) fn record_connection(app: tauri::AppHandle, generation: u64) {
+pub(crate) fn record_connection(app: tauri::AppHandle, generation: u64, origin: String) {
     #[cfg(feature = "lifecycle-smoke")]
-    smoke::connected(&app, generation);
+    smoke::connected(&app, generation, origin);
     #[cfg(not(feature = "lifecycle-smoke"))]
-    let _ = (app, generation);
+    let _ = (app, generation, origin);
+}
+
+#[tauri::command]
+pub(crate) fn record_connection_failure(app: tauri::AppHandle, code: String, origin: String) {
+    #[cfg(feature = "lifecycle-smoke")]
+    smoke::failed(&app, code, origin);
+    #[cfg(not(feature = "lifecycle-smoke"))]
+    let _ = (app, code, origin);
 }
 
 #[cfg(feature = "lifecycle-smoke")]
@@ -15,7 +23,7 @@ mod smoke {
     use std::{sync::Mutex, time::{Duration, Instant}};
     use serde::Serialize;
     use tauri::{AppHandle, Listener, Manager};
-    use crate::supervisor::{CoreState, crash_for_smoke};
+    use crate::supervisor::{ConnectionError, CoreState, crash_for_smoke};
 
     #[derive(Default, Serialize)]
     struct Evidence {
@@ -23,6 +31,9 @@ mod smoke {
         connected: Vec<u64>,
         exhausted: bool,
         phase: String,
+        development: bool,
+        origins: Vec<String>,
+        ui_exhausted: bool,
     }
     #[derive(Default)]
     struct SmokeState(Mutex<Evidence>);
@@ -43,21 +54,33 @@ mod smoke {
         save(app);
     }
 
-    pub(super) fn connected(app: &AppHandle, generation: u64) {
+    pub(super) fn connected(app: &AppHandle, generation: u64, origin: String) {
         let Some(state) = app.try_state::<SmokeState>() else { return };
         let core = app.state::<CoreState>();
         let valid = core.connection.lock().ok()
             .and_then(|connection| connection.clone()).is_some_and(|connection| connection.generation == generation);
         if !valid { return; }
         if let Ok(mut evidence) = state.0.lock() {
+            if !evidence.origins.contains(&origin) { evidence.origins.push(origin); }
             if !evidence.connected.contains(&generation) { evidence.connected.push(generation); }
+        }
+        save(app);
+    }
+
+    pub(super) fn failed(app: &AppHandle, code: String, origin: String) {
+        let Some(state) = app.try_state::<SmokeState>() else { return };
+        if code != "CORE_RESTART_EXHAUSTED" ||
+            !matches!(app.state::<CoreState>().current_connection(), Err(ConnectionError::Exhausted)) { return; }
+        if let Ok(mut evidence) = state.0.lock() {
+            evidence.ui_exhausted = true;
+            if !evidence.origins.contains(&origin) { evidence.origins.push(origin); }
         }
         save(app);
     }
 
     pub(crate) fn start(app: AppHandle) {
         if std::env::var_os("STATE_HUB_LIFECYCLE_SMOKE_FILE").is_none() { return; }
-        app.manage(SmokeState::default());
+        app.manage(SmokeState(Mutex::new(Evidence { development: tauri::is_dev(), ..Evidence::default() })));
         let handle = app.clone();
         app.listen("core-restart-exhausted", move |_| {
             if let Ok(mut evidence) = handle.state::<SmokeState>().0.lock() { evidence.exhausted = true; }
@@ -71,7 +94,7 @@ mod smoke {
                 let (connections, exhausted) = {
                     let state = app.state::<SmokeState>();
                     let evidence = state.0.lock().unwrap();
-                    (evidence.connected.len(), evidence.exhausted)
+                    (evidence.connected.len(), evidence.exhausted && evidence.ui_exhausted)
                 };
                 let done = if mode == "startup-failure" { exhausted } else { connections >= 2 };
                 let timed_out = started.elapsed() > Duration::from_secs(120);

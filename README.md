@@ -18,6 +18,12 @@ npm run dev
 
 底层仍使用 pnpm 管理 workspace 依赖，不需要执行 `npm install`。仅调试前端可用 `pnpm dev:desktop`；仅调试 Core 的令牌要求见 [运行手册](docs/OPERATIONS.md)。
 
+完整功能验证请使用上述桌面开发命令。Tauri 开发窗口加载 `http://localhost:1420`，监督程序会自动把当前开发页面的精确来源交给 Core，并继续使用临时管理令牌。打包后的应用不会放行该开发来源；普通浏览器打开 Vite 页面也不会获得 Tauri 的私有会话能力。
+
+连接失败时界面显示安全的原因分类并自动重试；无法判断的网络错误不会冒充已确定的跨域问题。若提示“自动恢复已停止”，请从托盘退出后重新启动，未保存编辑会丢失。关闭窗口只是隐藏，不能代替退出重开。
+
+Windows 原生回归同时覆盖内置页面与开发页面：开发测试先用 `tauri.lifecycle-smoke.conf.json` 的配置覆盖构建带 `lifecycle-smoke`、不带 `custom-protocol` 的可执行文件，再运行 `node tools/desktop-dev-smoke.mjs <可执行文件路径>`。测试独占默认开发端口，使用临时数据，并验证真实快照/订阅、监督恢复、界面识别恢复耗尽和退出回收；端口已占用时直接失败。
+
 核心服务启动后会在当前用户运行目录写入只对当前用户开放的 discovery 文件，并监听随机 loopback 端口。生产者 API 需要独立 bearer token；管理 API 只接受由桌面壳注入的私有会话令牌。
 
 ## 工作区

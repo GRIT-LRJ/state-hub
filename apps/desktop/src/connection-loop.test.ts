@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CoreConnection } from "./api.js";
 import { CoreConnectionLoop, type CoreTransport } from "./connection-loop.js";
+import { ConnectionFailure } from "./connection-errors.js";
 
 const oldCore: CoreConnection = { endpoint: "http://127.0.0.1:10001", adminToken: "old", generation: 1 };
 const newCore: CoreConnection = { endpoint: "http://127.0.0.1:10002", adminToken: "new", generation: 2 };
@@ -87,7 +88,7 @@ describe("desktop Core connection loop", () => {
       loop.start();
       await vi.waitFor(() => expect(subscriptions).toBe(1), { timeout: 3_000 });
       expect(snapshots).toEqual([7]);
-      expect(errors).toContain("Core connection unavailable");
+      expect(errors).toContain("UNAVAILABLE");
       expect(errors).not.toContain("untrusted-startup-detail");
     } finally { await loop.stop(); }
   });
@@ -114,4 +115,37 @@ describe("desktop Core connection loop", () => {
       await vi.waitFor(() => expect(snapshots).toEqual([2]));
     } finally { await loop.stop(); }
   });
+});
+
+it("reads persistent exhaustion on mount, stops timed retries, and wakes on a new ready event", async () => {
+  const connection = vi.fn(async () => { throw new ConnectionFailure("CORE_RESTART_EXHAUSTED"); });
+  const errors: Array<string | undefined> = [];
+  const loop = new CoreConnectionLoop({ connection, snapshot: async () => 1,
+    subscribe: async (_connection, _notice, signal) => untilAbort(signal) },
+  { snapshot: () => undefined, error: (error) => errors.push(error) });
+  vi.useFakeTimers();
+  try {
+    loop.start();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(connection).toHaveBeenCalledOnce();
+    expect(errors).toEqual(["CORE_RESTART_EXHAUSTED"]);
+    loop.reconnectNow();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(connection).toHaveBeenCalledTimes(2);
+  } finally { await loop.stop(); vi.useRealTimers(); }
+});
+
+it("retains a classified snapshot refresh failure instead of losing it to subscription abort", async () => {
+  let notice: (() => void) | undefined;
+  const errors: Array<string | undefined> = [];
+  const snapshot = vi.fn().mockResolvedValueOnce(1).mockRejectedValue(new ConnectionFailure("UNAUTHORIZED"));
+  const loop = new CoreConnectionLoop({ connection: async () => oldCore, snapshot,
+    subscribe: async (_connection, onNotice, signal) => { notice = onNotice; await untilAbort(signal); } },
+  { snapshot: () => undefined, error: (error) => errors.push(error) });
+  try {
+    loop.start();
+    await vi.waitFor(() => expect(notice).toBeDefined());
+    notice!();
+    await vi.waitFor(() => expect(errors).toContain("UNAUTHORIZED"));
+  } finally { await loop.stop(); }
 });

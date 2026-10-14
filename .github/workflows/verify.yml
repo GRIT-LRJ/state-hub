@@ -54,3 +54,10 @@ jobs:
         env:
           VITE_STATE_HUB_LIFECYCLE_SMOKE: '1'
       - run: node tools/desktop-lifecycle-smoke.mjs apps/desktop/src-tauri/target/release/state-hub-desktop.exe
+      - name: Build development-page lifecycle executable
+        shell: pwsh
+        run: |
+          $env:TAURI_CONFIG = Get-Content apps/desktop/src-tauri/tauri.lifecycle-smoke.conf.json -Raw
+          cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features lifecycle-smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - run: node tools/desktop-dev-smoke.mjs apps/desktop/src-tauri/target/debug/state-hub-desktop.exe

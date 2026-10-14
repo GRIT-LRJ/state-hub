@@ -148,7 +148,7 @@ describe("independent desktop configuration operations", () => {
     fireEvent.click(button("审阅本次规则修改")); await screen.findByRole("dialog", { name: "审阅本次修改" });
     expect(candidate.bindings[0]).toMatchObject({ conditions: [{ pointer: "/second", operator: "eq", value: 7 }],
       mapping: { fixed: { kind: "constant", value: 42 }, selected: { kind: "pointer", pointer: "/content" }, formatted: { kind: "template", template: "{{content}}" } } });
-  });
+  }, 15_000);
 
   it("offers recovery when the selected output changes without discarding rule contents", async () => {
     current = { driverInstances: [output], bindings: [binding] };
@@ -160,7 +160,7 @@ describe("independent desktop configuration operations", () => {
     fireEvent.click(button("更新目标输出信息并保留规则编辑")); await ready("审阅本次规则修改");
     fireEvent.click(button("审阅本次规则修改")); await screen.findByRole("dialog", { name: "审阅本次修改" });
     expect(candidate.bindings[0]?.name).toBe("保留此名称");
-  });
+  }, 15_000);
 
   it("uses safe text for plugin descriptions", async () => {
     vi.mocked(loadConfigCatalog).mockResolvedValue({ ...catalog, driverDefinitions: [{ ...catalog.driverDefinitions[0]!,

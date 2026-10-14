@@ -47,7 +47,7 @@ describe("desktop connection against the real Core", () => {
       expect(seen[0]).toEqual({ generation: 1, claims: 0 });
       expect(subscriptions).toBe(1);
       await harness.crash();
-      await vi.waitFor(() => expect(lastError).toBe("Core connection unavailable"),
+      await vi.waitFor(() => expect(lastError).toBe("UNAVAILABLE"),
         { timeout: 5_000 });
       generation = 2;
       await harness.restart();

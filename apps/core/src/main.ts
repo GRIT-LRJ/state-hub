@@ -50,6 +50,7 @@ const ttlScheduler = new ClaimTtlScheduler(service, events);
 const { app, port } = await listenFetchCompatible(() => createServer({
   service, events, drivers, dispatcher, plugins, pluginRuntime,
   adminToken: config.adminToken,
+  ...(config.desktopDevOrigin ? { desktopDevOrigin: config.desktopDevOrigin } : {}),
   ...(process.env.NODE_ENV === "test" &&
     process.env.STATE_HUB_TEST_UPGRADE_CRASH_AFTER_COMMIT === "1"
     ? { onUpgradeCommitted: () => process.exit(73) } : {}),

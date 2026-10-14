@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const executable = process.argv[2];
+const devOrigin = process.argv[3];
 if (!executable) throw new Error("Expected lifecycle-smoke executable path");
 const root = mkdtempSync(join(tmpdir(), "state-hub-desktop-lifecycle-"));
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -71,6 +72,10 @@ for (const mode of ["recovery", "startup-failure", "parent-crash"]) {
     assert.ok(child.exitCode !== null || child.signalCode !== null, `${mode}: desktop exit timed out`);
     await exited;
     evidence = JSON.parse(readFileSync(file, "utf8"));
+    assert.equal(evidence.development, Boolean(devOrigin), "Must test the requested resource mode");
+    assert.ok(evidence.origins.length > 0, "Real UI must report its origin");
+    assert.ok(evidence.origins.every((origin) => devOrigin ? origin === devOrigin :
+      ["http://tauri.localhost", "https://tauri.localhost", "tauri://localhost"].includes(origin)));
     assert.ok(evidence.spawned.every(([generation, pid]) => Number.isInteger(generation) && Number.isInteger(pid) && pid > 0));
     if (mode === "parent-crash") {
       assert.ok(killedParent);
@@ -85,6 +90,7 @@ for (const mode of ["recovery", "startup-failure", "parent-crash"]) {
         assert.deepEqual(evidence.spawned.map(([generation]) => generation), [1, 2], "Supervisor must spawn both Core generations");
       } else {
         assert.equal(evidence.exhausted, true);
+        assert.equal(evidence.ui_exhausted, true, "UI must observe the persistent exhausted state");
         assert.equal(evidence.spawned.length, 5, "Startup retry budget must stop at five attempts");
         assert.equal(evidence.connected.length, 0);
       }

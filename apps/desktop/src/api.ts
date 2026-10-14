@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ManagedConfig } from "./config-management.js";
+import { ConnectionFailure, httpConnectionFailure } from "./connection-errors.js";
 
 export interface CoreConnection {
   endpoint: string;
@@ -37,7 +38,13 @@ export interface RuntimeSnapshot {
 }
 
 export async function getConnection(): Promise<CoreConnection> {
-  return await invoke<CoreConnection>("core_connection");
+  try { return await invoke<CoreConnection>("core_connection"); }
+  catch (error) {
+    if (error === "CORE_STARTING" || error === "CORE_RESTART_EXHAUSTED" || error === "CORE_INTERNAL_ERROR") {
+      throw new ConnectionFailure(error);
+    }
+    throw new ConnectionFailure("UNAVAILABLE");
+  }
 }
 
 export async function coreFetch(path: string, init?: RequestInit, connection?: CoreConnection): Promise<Response> {
@@ -50,7 +57,7 @@ export async function coreFetch(path: string, init?: RequestInit, connection?: C
 
 export async function fetchSnapshot(connection?: CoreConnection, signal?: AbortSignal): Promise<RuntimeSnapshot> {
   const response = await coreFetch("/api/v1/admin/snapshot", signal ? { signal } : {}, connection);
-  if (!response.ok) throw new Error(`Core returned HTTP ${response.status}`);
+  if (!response.ok) throw httpConnectionFailure(response.status);
   return (await response.json()) as RuntimeSnapshot;
 }
 
@@ -120,7 +127,7 @@ export async function publishConfig(revision: number): Promise<void> {
 export async function subscribe(connection: CoreConnection, onChange: () => void,
   signal: AbortSignal): Promise<void> {
   const response = await coreFetch("/api/v1/admin/events", { signal }, connection);
-  if (!response.ok || !response.body) throw new Error(`SSE returned HTTP ${response.status}`);
+  if (!response.ok || !response.body) throw httpConnectionFailure(response.status);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -140,7 +147,7 @@ export async function subscribe(connection: CoreConnection, onChange: () => void
           onChange();
           if (!reportedConnection && import.meta.env?.VITE_STATE_HUB_LIFECYCLE_SMOKE === "1") {
             reportedConnection = true;
-            void invoke("record_connection", { generation: connection.generation }).catch(() => undefined);
+            void invoke("record_connection", { generation: connection.generation, origin: location.origin }).catch(() => undefined);
           }
         }
         boundary = buffer.indexOf("\n\n");
