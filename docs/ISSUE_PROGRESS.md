@@ -2,7 +2,11 @@
 
 事实源：GitHub Issue #1、各子 Issue 全文、`docs/ARCHITECTURE.md`。`阻塞依赖` 是实施 DAG；`验收依赖` 不阻止开始写代码，但阻止最终 PASS。状态描述的是本地代码与验收结果，GitHub open/closed 状态另行核对。执行顺序优先保证正确性与安全边界，再做运行时、管理界面、集成、性能及发布。
 
-## 2026-10-14：分功能提交与推送（最新）
+## 2026-10-14：当前验收优先级（最新）
+
+用户明确要求以正常启动、正常使用为当前目标，并要求同步修改 Issue。#22 的容量/延迟与 #23 的启动数值要求尚不能确认合理性，改为参考指标，#22 保持 open/DEFERRED，不把此前失败改记 PASS。当前仍要求四项基础门禁、真实 Core 功能验收、Windows 原生生命周期、关键六栏操作及安全边界；三平台安装、更新、签名、公证仍是正式发行条件。以下日期条目为历史记录，以本节和文末新验证结果为准。
+
+## 2026-10-14：分功能提交与推送（历史批次）
 
 用户授权的四批代码均已提交并推送到 origin/main：
 
@@ -81,11 +85,11 @@
 | #19 暂停、确认与诊断 UI | PASS | High | #7、#14 / #2、#16 | claim revision 确认、暂停恢复、支持包预览/导出 | 已完成；#16 验收依赖满足 | 四项门禁、组件与真实 Core ack/pause/诊断 PASS | Spec/Correctness/Security/Recovery PASS | fe70d5e（依赖修复 03f71e6） |
 | #20 Codex spool 验收 | PASS | High | 无 / #2、#8、#9 | 原子 spool、fail-open、并发 drain、多会话真实 Core 验收 | 已完成 | 四项门禁 PASS；CLI 黑盒及真实 Core HTTP 计数 PASS | Spec/Correctness/Security/Recovery PASS | 0e4b0cc |
 | #21 VK87 契约验收 | PASS | High | 无 / #2 | fake HID、唯一接口与 65 字节、真实 Core 无硬件验收、人工 opt-in | 已完成 | 四项门禁 PASS；fake HID 与真实 Core PASS | Spec/Correctness/Security/Recovery PASS；运行器偶发 IPC 记为 Medium | 470b30e |
-| #22 容量与延迟验收 | TODO | Medium | #2、#8、#9、#10、#12、#13、#15 / 无 | 真实事件与状态投影负载、共享资源竞争、重启后真实 HTTP 重放；优化查询和调度让步 | 已有实现保留；用户将 Windows CI 性能优化延后，不阻塞本次启动/运行验收 | Windows CI 基础门禁 PASS、事件性能 FAIL；此前本地/独立 Linux 性能 PASS | Correctness/Architecture 静态 PASS；性能未达标证据保留 | c934ba5、3325dfb（均保留） |
-| #23 Packaging 与 Updater | BLOCKED | High | 无 / #2、#16、#17、#18、#19、#22 | 三平台安装与升级 smoke；Windows 已完成真实安装、签名升级和失败恢复 | Windows 未签名 EXE 创建约 3.3 秒，首屏超标；macOS/Linux 真实运行仍缺证据；基础设施已提交；真实发行验收继续保留 | 四项基础门禁、Rust 6/6、release 11/11、sidecar、Windows 更新 smoke PASS；驱动激活 P95 100.84ms；安装首屏 P95 4485ms FAIL；进程创建对照已记录 | Spec FAIL：首屏性能和 macOS/Linux 真机证据未达标；Correctness 架构局部 PASS；基础设施已提交；发行验收仍未通过 | 9d97da1（基础设施） |
-| #24 Stable 发布门禁 | BLOCKED | High | #23 / #3–#22 | 版本/产品验收 fail-closed gate、三平台签名/公证验证、候选产物证明与四目标 manifest 组装 | 候选流水线和离线组装已实现；#23、正式签名/公证凭据和三平台候选验证未满足 | release 11/11、YAML 语法 PASS；真实签名/公证/证明未运行 | Spec FAIL：#23 和真实候选证据缺失；基础设施已提交；发行验收仍未通过 | 9d97da1（基础设施） |
+| #22 性能基线与目标校准 | DEFERRED | 非阻断 / needs-info | #2、#8、#9、#10、#12、#13、#15 / 无 | 保留真实负载与指标，补齐场景、硬件、计时和重复测量依据 | 用户明确推迟硬阈值；不影响正常启动/使用验收 | 旧 CI 性能失败保留；新策略待验证 | 不是性能 PASS；参考目标合理性待确认 | c934ba5、3325dfb（历史实现） |
+| #23 Packaging 与 Updater | BLOCKED | High | 无 / #2、#16、#17、#18、#19、#22 | 三平台安装与升级 smoke；Windows 已完成真实安装、签名升级和失败恢复 | Windows 首屏旧基线保留为参考；macOS/Linux 真实运行仍缺证据；基础设施已提交；真实发行验收继续保留 | 四项基础门禁、Rust 6/6、release 11/11、sidecar、Windows 更新 smoke PASS；驱动激活 P95 100.84ms；安装首屏 P95 4485ms FAIL；进程创建对照已记录 | Spec 未完成：macOS/Linux 真机证据缺失；首屏数值已降为参考；Correctness 架构局部 PASS；基础设施已提交；发行验收仍未通过 | 9d97da1（基础设施） |
+| #24 Stable 发布门禁 | BLOCKED | High | #23 / #3–#21；#22 DEFERRED 豁免 | 版本/产品验收 fail-closed gate、三平台签名/公证验证、候选产物证明与四目标 manifest 组装 | 候选流水线和离线组装已实现；#23、正式签名/公证凭据和三平台候选验证未满足 | release 11/11、YAML 语法 PASS；真实签名/公证/证明未运行 | Spec FAIL：#23 和真实候选证据缺失；基础设施已提交；发行验收仍未通过 | 9d97da1（基础设施） |
 
-`#23` 的跨平台真实 smoke 与 `#24` 的真实签名、公证需要相应平台和发布凭据的客观证据；基础设施代码可先实施。不能把尚未运行的外部验收记为 PASS。Windows 安装首屏的实测 P95 仍超过 1 秒，也属于技术阻断，不是领域决策。
+`#23` 的跨平台真实 smoke 与 `#24` 的真实签名、公证需要相应平台和发布凭据的客观证据；基础设施代码可先实施。不能把尚未运行的外部验收记为 PASS。Windows 安装首屏超过旧 1 秒参考值的历史事实保留；按 2026-10-14 用户修订，它不再作为当前阻断。
 
 ## 2026-10-12 — 六栏 UI 重构暂停（用户要求）
 
@@ -120,3 +124,23 @@
 提交根目录 npm run dev、README/运行说明，并为跨栏两轮表单操作的单个正确性测试设置 15 秒执行时限，保留所有断言。初始同一用例两次 5 秒超时记录保留；修正后定向及全套候选验证通过。Spec/Correctness 为顺序准备依赖、失败短路、复用既有桌面监督和启动路径；Security 无新管理 token 或持久凭据；Recovery 复用 2026-10-13 同一启动命令的两次真实启动/退出证据，不修改产品性能门禁。
 
 候选 tree `347c783194cedba84a0cb0908ff67c50aa1fb429`，parent `6c454ebf545c53ab0376b4b117230953909990d7`；证据 `C:\Users\GRIT-LRJ\AppData\Local\Temp\state-hub-candidate-BiyUQE\evidence.json`。冻结安装和 test/test:acceptance/check/build 全部 exit 0；提交前核对 index tree 未变化，提交后再核对 commit tree。本次用户明确授权按功能提交和推送，验证范围为该批代码基础门禁，不等于跨平台发行或性能验收；不关闭 Issue。
+
+
+## 2026-10-14 — Windows CI 存储位置诊断与修复候选
+
+最新主分支 CI 38509002796：Linux verify、Windows 基础 verify 与 desktop-lifecycle 成功，Windows 性能失败（持续 97.28/s、P95 316.21ms、突发 P95 843.37ms）。本机原代码 pnpm test:performance 退出 0，日志 `%TEMP%/state-hub-ci-perf-baseline.log`；不以本机结果代替 CI。
+
+远端诊断 38511425115 在同一运行器比较两处临时目录：SQLite WAL + FULL 的 500 次提交，系统 TEMP 用时 9707.39ms、P95 33.01ms，RUNNER_TEMP 用时 97.22ms、P95 0.303ms。完整事件负载持续输入 P95 从 234.27ms 降至 10.31ms、吞吐从 97.28/s 升至 100.16/s。带 100 微秒 CPU 采样的 runner-temp 突发 P95 104.38ms 仍失败，不能称为完整验收通过。诊断产物 `%TEMP%/state-hub-ci-diagnostics-38511425115/` 与远端 artifact 保留。
+
+修复仅在自动 verify 的两个 Windows job 中把 TEMP/TMP 指向 RUNNER_TEMP，涵盖真实 Core 与桌面 smoke 的临时数据库；Linux 保持原路径。Spec/Correctness 审查保持原负载、100ms 延迟断言和吞吐门禁；Security 不修改 SQLite 持久化、鉴权或发布权限；Recovery 保留全部真实进程场景和断言。旧 PowerShell 查询超时及 ECONNREFUSED 原因尚未证实，不能因本次目录修正宣称都已修复。随后验证准确暂存 tree，再推送运行完整 CI；当前仍待远端正式结果，不关闭 Issue。
+
+
+## 2026-10-14 — 用户修订性能要求：启动与正常使用优先
+
+用户明确表示性能目标合理性未定，要求优化当前验收并同步 Issue。已修改 GitHub #1/#22/#23/#24，#22 改为 open/needs-info/DEFERRED，移除其作为 #23/#24 当前验收依赖；不关闭 Issue、不伪造性能 PASS。#24 原文将包装 #23 错写为 #22 的引用一并纠正。
+
+日常 push/PR 保留四项基础门禁、Windows 原生生命周期并加入 release policy tests；性能移到独立手动 performance-report.yml。事件/状态/驱动/安装首屏的旧数值默认 reference-only，仍记录实际值和 referenceTargetsMet，主动设置 STATE_HUB_ENFORCE_PERFORMANCE_TARGETS=1 可对照旧阈值。1000 事件单元测试改为逐条命令已提交及完整事件计数断言。启动等待、HTTP 成功、投递、投影、重启、退出、安全和签名断言保留。stable gate 只允许 #22 显式 DEFERRED 豁免；其他未通过项继续拒绝。保留已证实的 Windows RUNNER_TEMP 存储位置修复。
+
+修订前候选 bf60288dd98939e3293ef8660eb53c9e9b49c90e 的证据 `%TEMP%/state-hub-candidate-BG5AoJ/evidence.json` 保持 FAIL：安装和单元测试退出 0，acceptance 在 plugin-runtime 的 Vitest/tinypool 通信报 ERR_IPC_CHANNEL_CLOSED，未运行后续 check/build。用户随后改变要求，故该候选未提交，不再重试已废弃范围，不能把新候选结果归属给它。
+
+当前定向验证：性能政策 4/4、release 12/12、1000 事件完整性 1/1；workflow YAML 和自动/手动触发分离检查通过。Spec 审查对应用户的新验收优先级；Correctness 检查正确性断言与 bounded timeout 保留、只有数值阈值降为参考；Security 检查无持久化/鉴权/签名豁免且只允许 #22 DEFERRED；Recovery 检查真实生命周期与重启/回收路径未删除。完整候选、真实启动与远端 CI 结果随后补记。

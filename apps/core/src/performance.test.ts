@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { registerProducer } from "./auth.js";
 import { StateHubDatabase } from "./database.js";
@@ -17,19 +16,18 @@ beforeAll(() => {
 
 afterAll(() => db.close());
 
-it("accepts a 1000-event burst with command commit P95 below 100ms", () => {
-  const durations: number[] = [];
+it("commits every command and event in a 1000-event burst", () => {
+  const commands = new Set<string>();
   for (let index = 0; index < 1_000; index += 1) {
-    const started = performance.now();
-    service.emitEvent("load", producerToken, {
+    const accepted = service.emitEvent("load", producerToken, {
       eventId: `burst-${index}`,
       type: "load.sample",
       scopeId: `scope-${index % 50}`,
       value: { index },
     });
-    durations.push(performance.now() - started);
+    commands.add(accepted.commandId);
+    expect(service.getCommand("load", accepted.commandId)?.status).toBe("applied");
   }
-  durations.sort((a, b) => a - b);
-  const p95 = durations[Math.floor(durations.length * 0.95)] ?? Number.POSITIVE_INFINITY;
-  expect(p95).toBeLessThanOrEqual(100);
+  expect(commands.size).toBe(1000);
+  expect(db.raw.prepare("SELECT count(*) AS count FROM occurrence_events").get()).toEqual({ count: 1000 });
 });

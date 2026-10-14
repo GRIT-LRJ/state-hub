@@ -41,8 +41,7 @@ jobs:
       - run: pnpm verify
       - run: pnpm test:release
       - run: pnpm test:driver-startup
-      - run: pnpm test:performance
-      - name: Require Issue 1 through 23 acceptance at this candidate HEAD
+      - name: Require functional product acceptance at this candidate HEAD
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: node tools/release/stable-policy.mjs "$RELEASE_VERSION"

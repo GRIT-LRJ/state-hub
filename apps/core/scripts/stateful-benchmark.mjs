@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CoreAcceptanceHarness } from "../src/acceptance/harness.ts";
+import { reportPerformanceTargets } from "../../../tools/performance-policy.mjs";
 
 const SOURCES = 50;
 const SCOPES = 10;
@@ -137,11 +138,13 @@ export async function statefulBenchmark() {
     assert.ok(received.length >= beforeRestart + SOURCES, "Restart did not replay every current resource to the real target");
     await run("recovery", 100, true);
     result.driverInvocationCount = received.length;
-    for (const phase of ["sustained", "burst", "recovery"]) {
-      assert.ok(result.phases[phase].p95Ms <= 100, `${phase}: stateful HTTP acceptance P95 exceeds 100 ms`);
-    }
-    assert.ok(result.phases.sustained.acceptedPerSecond >= 99, "Stateful input did not sustain 100/s schedule");
-    result.status = "PASS";
+    result.performance = reportPerformanceTargets("stateful-input", [
+      { metric: "sustainedAcceptedPerSecond", value: result.phases.sustained.acceptedPerSecond, min: 99 },
+      ...["sustained", "burst", "recovery"].map((phase) => ({
+        metric: `${phase}P95Ms`, value: result.phases[phase].p95Ms, max: 100,
+      })),
+    ]);
+    result.status = "FUNCTIONAL_PASS";
   } catch (error) {
     result.status = "FAIL";
     result.failedStage = stage;

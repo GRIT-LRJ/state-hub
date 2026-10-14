@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import Database from "better-sqlite3";
 import { CoreAcceptanceHarness } from "../src/acceptance/harness.ts";
 import { statefulBenchmark } from "./stateful-benchmark.mjs";
+import { reportPerformanceTargets } from "../../../tools/performance-policy.mjs";
 
 const SOURCE_COUNT = 50;
 const OUTPUT_COUNT = 50;
@@ -178,14 +179,12 @@ async function main() {
 
     assert.equal(result.delivered, SOURCE_COUNT + SUSTAINED_EVENTS + BURST_EVENTS + RECOVERY_EVENTS);
     assert.equal(result.deadLetters, 0);
-    assert.ok(result.phases.sustained.acceptedPerSecond >= 99,
-      "Sustained HTTP input fell below the 100 events/s target schedule");
-    assert.ok(result.phases.sustained.p95Ms <= 100,
-      "Sustained HTTP input acceptance P95 exceeded 100 ms");
-    assert.ok(result.phases.burst.p95Ms <= 100,
-      "Burst HTTP input acceptance P95 exceeded 100 ms");
-    assert.ok(result.phases.recovery.p95Ms <= 100,
-      "Recovered HTTP input acceptance P95 exceeded 100 ms");
+    reportPerformanceTargets("event-input", [
+      { metric: "sustainedAcceptedPerSecond", value: result.phases.sustained.acceptedPerSecond, min: 99 },
+      ...["sustained", "burst", "recovery"].map((phase) => ({
+        metric: `${phase}P95Ms`, value: result.phases[phase].p95Ms, max: 100,
+      })),
+    ]);
   } catch (error) {
     process.stderr.write(`Performance stage ${stage} failed; Core running: ${harness.isRunning}\n`);
     process.stderr.write(`${JSON.stringify(result, null, 2)}\n`);

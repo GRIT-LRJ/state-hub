@@ -1,0 +1,41 @@
+name: Performance reference report
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use runner temporary disk on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Reference misses are reported; functional errors still fail this manual job.
+      - name: Measure event and stateful workloads
+        shell: bash
+        run: pnpm test:performance > performance.log 2>&1
+      - name: Measure driver startup
+        shell: bash
+        run: pnpm test:driver-startup > driver-startup.log 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-reference-${{ matrix.os }}
+          path: |
+            performance.log
+            driver-startup.log
+          if-no-files-found: error

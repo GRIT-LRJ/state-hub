@@ -19,6 +19,9 @@ export function checkStablePolicy(progress, version, appVersion, ancestor = () =
   }
   for (let issue = 1; issue <= 23; issue++) {
     const row = rows.get(issue);
+    // Issue #22 is explicitly deferred by the product owner (2026-10-14).
+    // This exception cannot waive any functional, security or packaging issue.
+    if (issue === 22 && row?.status === "DEFERRED") continue;
     if (!row || row.status !== "PASS") throw new Error(`Issue #${issue} has not passed acceptance`);
     if (issue > 1) {
       const hashes = row.commits?.match(/\b[0-9a-f]{7,40}\b/g) ?? [];

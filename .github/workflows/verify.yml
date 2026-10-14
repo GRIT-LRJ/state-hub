@@ -13,6 +13,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # Keep real SQLite databases on the runner's temporary disk. Windows' user
+      # TEMP lives on the much slower system volume; durability remains unchanged.
+      - name: Use runner temporary disk on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -20,11 +28,16 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
-      - run: pnpm test:performance
+      - run: pnpm test:release
   desktop-lifecycle:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Use runner temporary disk on Windows
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

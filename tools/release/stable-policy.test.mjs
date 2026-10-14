@@ -21,3 +21,15 @@ test("missing platform signing and notarization credentials fail closed", () => 
   assert.throws(() => checkReleaseCredentials("darwin", updater), /APPLE_CERTIFICATE/);
   assert.throws(() => checkReleaseCredentials("other", updater));
 });
+
+test("only explicitly deferred performance targets are exempt from the stable gate", () => {
+  const deferred = allPassed.replace("| #22 item | PASS", "| #22 item | DEFERRED");
+  assert.doesNotThrow(() => checkStablePolicy(deferred, "1.2.3", "1.2.3"));
+  for (const status of ["TODO", "FAIL", "BLOCKED"]) {
+    assert.throws(() => checkStablePolicy(allPassed.replace("| #22 item | PASS", `| #22 item | ${status}`), "1.2.3", "1.2.3"));
+  }
+  for (const issue of [1, 8, 16, 23]) {
+    assert.throws(() => checkStablePolicy(deferred.replace(`| #${issue} item | PASS`, `| #${issue} item | DEFERRED`), "1.2.3", "1.2.3"));
+  }
+  assert.throws(() => checkStablePolicy(deferred.replace(/^.*#22 item.*$/m, ""), "1.2.3", "1.2.3"));
+});

@@ -12,7 +12,7 @@
     "build:packages": "pnpm --filter \"./packages/**\" -r build",
     "build:sidecar": "node tools/prepare-sidecar.mjs",
     "check": "pnpm -r --if-present check",
-    "test": "pnpm build:packages && pnpm -r --if-present test",
+    "test": "pnpm build:packages && node --test tools/performance-policy.test.mjs && pnpm -r --if-present test",
     "test:acceptance": "pnpm build:packages && pnpm --filter @state-hub/core test:acceptance && pnpm --filter @state-hub/desktop test:acceptance",
     "test:performance": "pnpm build:packages && pnpm --filter @state-hub/core test:performance",
     "test:release": "node --test tools/release/*.test.mjs",

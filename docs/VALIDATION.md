@@ -16,7 +16,15 @@ commit 后用 `git rev-parse HEAD^{tree}` 与 evidence 的 tree 核对。二者�
 
 纯说明文档的收尾可以复用最近已验证的代码结果，前提是审查确认 diff 不含代码、依赖、构建输入、运行配置、测试或 CI 修改。记录被验证的代码 commit/tree 以及文档 diff；不要声称文档提交的 tree 与旧证据相同。涉及可执行行为或验收门禁的修改仍必须重新运行对应门禁。这样既保留证据边界，也避免为不影响程序的措辞修订重复运行全部产品测试。
 
-CI 的 `verify.yml` 在 push 和 pull request 上从 checkout 运行基础门禁和容量验收。CI 通过不能替代本地未覆盖的原生桌面、签名或跨平台发行验收。
+CI 的 `verify.yml` 在 push 和 pull request 上从 checkout 运行四项基础门禁、release policy 单元测试和 Windows 真实桌面生命周期验收。Windows 临时数据库使用 RUNNER_TEMP，避免系统 TEMP 磁盘差异。CI 通过不能替代本地未覆盖的原生视觉、签名或跨平台发行验收。
+
+## 当前阶段：可启动、可使用
+
+2026-10-14 用户明确调整优先级：100 events/s、100 ms 输入 P95、1 s 启动等指标的合理性尚未确认，不再作为当前阶段的硬门禁。保留功能测试中的请求成功、持久化、投递、重启恢复及退出回收断言，也保留防止永远等待的测试超时；超时是失败保护，不表示已确定产品响应目标。
+
+性能由手动 `performance-report.yml` 或 `pnpm test:performance` 测量，默认输出 `reference-only`、实际值和 `referenceTargetsMet`。超出旧参考值不使功能检查失败；运行错误、无效测量和正确性断言失败仍退出非零。`STATE_HUB_ENFORCE_PERFORMANCE_TARGETS=1` 仅供主动对照旧目标，不能据此重新宣称未经确认的目标成为正式要求。带 CPU 采样的 `performance-diagnostics.yml` 只用于定位，不与无采样基线混用。
+
+Issue #22 显式记作 DEFERRED，既不伪造 PASS，也不阻断当前产品门禁。stable policy 只对 #22 的 DEFERRED 状态作例外，其余功能、原生包装、签名、公证和安全要求照常拒绝未通过项。重新启用性能硬门禁必须先补齐负载/环境/测量定义并获得用户确认。
 
 ## 验证哪些行为
 

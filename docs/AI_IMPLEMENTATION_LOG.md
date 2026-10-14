@@ -1251,3 +1251,23 @@ Core 的既有创建来源接口增加兼容的可选 `createOnly` 参数：事�
 四批代码分别提交并普通 fast-forward 推送到 origin/main；逐个核对提交 tree 等于该批 evidence tree，没有改写旧提交或强制推送。最终代码提交 d6f4253978912bf0842f9576048e762bfaa286d8 之后只更新 ISSUE_PROGRESS、AI_IMPLEMENTATION_LOG、UI_REDESIGN_HANDOFF 三份说明文档，引用已验证代码结果，不冒称文档 tree 相同。进度表 #1/#22/#23/#24 的非 PASS 状态未改为 PASS；由于 stable-policy 读取该表，文档收尾额外检查 release tests 和 stable gate 继续拒绝当前未完成验收状态。
 
 最新已完成的远程 CI 38508006405（6c454eb）：Linux verify 和 Windows 真实生命周期通过；Windows pnpm verify 成功，但后续性能测试发生 ECONNREFUSED，任务失败。此前两轮生命周期查询超时保留，不能用新一次通过抹去；没有根因修复结论。最终提交的远程 CI 将另行产生，不将推送成功表述为 CI 全绿。
+
+
+## 2026-10-14 — Windows CI 存储位置诊断与修复候选
+
+最新主分支 CI 38509002796：Linux verify、Windows 基础 verify 与 desktop-lifecycle 成功，Windows 性能失败（持续 97.28/s、P95 316.21ms、突发 P95 843.37ms）。本机原代码 pnpm test:performance 退出 0，日志 `%TEMP%/state-hub-ci-perf-baseline.log`；不以本机结果代替 CI。
+
+远端诊断 38511425115 在同一运行器比较两处临时目录：SQLite WAL + FULL 的 500 次提交，系统 TEMP 用时 9707.39ms、P95 33.01ms，RUNNER_TEMP 用时 97.22ms、P95 0.303ms。完整事件负载持续输入 P95 从 234.27ms 降至 10.31ms、吞吐从 97.28/s 升至 100.16/s。带 100 微秒 CPU 采样的 runner-temp 突发 P95 104.38ms 仍失败，不能称为完整验收通过。诊断产物 `%TEMP%/state-hub-ci-diagnostics-38511425115/` 与远端 artifact 保留。
+
+修复仅在自动 verify 的两个 Windows job 中把 TEMP/TMP 指向 RUNNER_TEMP，涵盖真实 Core 与桌面 smoke 的临时数据库；Linux 保持原路径。Spec/Correctness 审查保持原负载、100ms 延迟断言和吞吐门禁；Security 不修改 SQLite 持久化、鉴权或发布权限；Recovery 保留全部真实进程场景和断言。旧 PowerShell 查询超时及 ECONNREFUSED 原因尚未证实，不能因本次目录修正宣称都已修复。随后验证准确暂存 tree，再推送运行完整 CI；当前仍待远端正式结果，不关闭 Issue。
+
+
+## 2026-10-14 — 用户修订性能要求：启动与正常使用优先
+
+用户明确表示性能目标合理性未定，要求优化当前验收并同步 Issue。已修改 GitHub #1/#22/#23/#24，#22 改为 open/needs-info/DEFERRED，移除其作为 #23/#24 当前验收依赖；不关闭 Issue、不伪造性能 PASS。#24 原文将包装 #23 错写为 #22 的引用一并纠正。
+
+日常 push/PR 保留四项基础门禁、Windows 原生生命周期并加入 release policy tests；性能移到独立手动 performance-report.yml。事件/状态/驱动/安装首屏的旧数值默认 reference-only，仍记录实际值和 referenceTargetsMet，主动设置 STATE_HUB_ENFORCE_PERFORMANCE_TARGETS=1 可对照旧阈值。1000 事件单元测试改为逐条命令已提交及完整事件计数断言。启动等待、HTTP 成功、投递、投影、重启、退出、安全和签名断言保留。stable gate 只允许 #22 显式 DEFERRED 豁免；其他未通过项继续拒绝。保留已证实的 Windows RUNNER_TEMP 存储位置修复。
+
+修订前候选 bf60288dd98939e3293ef8660eb53c9e9b49c90e 的证据 `%TEMP%/state-hub-candidate-BG5AoJ/evidence.json` 保持 FAIL：安装和单元测试退出 0，acceptance 在 plugin-runtime 的 Vitest/tinypool 通信报 ERR_IPC_CHANNEL_CLOSED，未运行后续 check/build。用户随后改变要求，故该候选未提交，不再重试已废弃范围，不能把新候选结果归属给它。
+
+当前定向验证：性能政策 4/4、release 12/12、1000 事件完整性 1/1；workflow YAML 和自动/手动触发分离检查通过。Spec 审查对应用户的新验收优先级；Correctness 检查正确性断言与 bounded timeout 保留、只有数值阈值降为参考；Security 检查无持久化/鉴权/签名豁免且只允许 #22 DEFERRED；Recovery 检查真实生命周期与重启/回收路径未删除。完整候选、真实启动与远端 CI 结果随后补记。

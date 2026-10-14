@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import Database from "better-sqlite3";
 import { CoreAcceptanceHarness } from "../src/acceptance/harness.ts";
+import { reportPerformanceTargets } from "../../../tools/performance-policy.mjs";
 
 const SAMPLES = 20;
 const times = [];
@@ -39,4 +40,4 @@ for (let index = 0; index < SAMPLES; index++) {
 const sorted = [...times].sort((a, b) => a - b);
 const p95 = sorted[Math.ceil(sorted.length * 0.95) - 1];
 process.stdout.write(`Driver publish-to-first-delivery (${SAMPLES} cold starts): P95 ${p95}ms, max ${sorted.at(-1)}ms\n`);
-if (p95 > 1000) process.exitCode = 1;
+reportPerformanceTargets("driver-startup", [{ metric: "publishToFirstDeliveryP95Ms", value: p95, max: 1000 }]);

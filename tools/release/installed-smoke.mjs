@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { performance } from "node:perf_hooks";
+import { reportPerformanceTargets } from "../performance-policy.mjs";
 
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 
@@ -107,5 +108,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const coreP95 = percentile(samples.map((sample) => sample.coreReadyMs), 95);
   const uiP95 = percentile(samples.map((sample) => sample.uiFirstPaintMs), 95);
   process.stdout.write(`Installed startup P95: Core ${coreP95}ms, UI ${uiP95}ms (${count} samples)\n`);
-  if (coreP95 > 1000 || uiP95 > 1000) process.exitCode = 1;
+  reportPerformanceTargets("installed-startup", [
+    { metric: "coreReadyP95Ms", value: coreP95, max: 1000 },
+    { metric: "uiFirstPaintP95Ms", value: uiP95, max: 1000 },
+  ]);
 }
