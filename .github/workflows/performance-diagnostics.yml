@@ -1,0 +1,43 @@
+name: Diagnose Windows performance
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:packages
+      - name: Compare durable SQLite commits on both temporary volumes
+        run: |
+          New-Item -ItemType Directory -Force -Path diagnostics | Out-Null
+          node tools/sqlite-storage-probe.mjs > diagnostics/storage.json
+          exit $LASTEXITCODE
+      - name: Measure original temporary location
+        run: |
+          New-Item -ItemType Directory -Force -Path diagnostics/original-profiles | Out-Null
+          $env:STATE_HUB_PERF_PROFILE_DIR = Join-Path $pwd 'diagnostics/original-profiles'
+          pnpm test:performance *> diagnostics/original-performance.log
+          exit $LASTEXITCODE
+      - name: Measure runner temporary location
+        if: always()
+        run: |
+          New-Item -ItemType Directory -Force -Path diagnostics/runner-profiles | Out-Null
+          $env:STATE_HUB_PERF_PROFILE_DIR = Join-Path $pwd 'diagnostics/runner-profiles'
+          $env:TEMP = $env:RUNNER_TEMP
+          $env:TMP = $env:RUNNER_TEMP
+          pnpm test:performance *> diagnostics/runner-performance.log
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-performance-diagnostics
+          path: diagnostics
+          if-no-files-found: error

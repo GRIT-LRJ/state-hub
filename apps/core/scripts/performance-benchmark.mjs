@@ -86,7 +86,7 @@ async function main() {
     memoryBytes: totalmem(),
   }, dimensions: { sources: SOURCE_COUNT, outputs: OUTPUT_COUNT,
     bindings: SOURCE_COUNT * BINDINGS_PER_SOURCE }, phases: {} };
-  const harness = await CoreAcceptanceHarness.start();
+  const harness = await CoreAcceptanceHarness.start({ cpuProfileDirectory: process.env.STATE_HUB_PERF_PROFILE_DIR });
   let stage = "setup";
   try {
     const producers = [];
