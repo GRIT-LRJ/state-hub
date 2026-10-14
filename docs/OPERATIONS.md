@@ -83,3 +83,19 @@ Hook 是短同步调用：先把命令原子写入 spool，再尝试 800ms loopb
 标准验证必须包含 `pnpm test`、`pnpm test:acceptance`、`pnpm check` 和 `pnpm build`。process-level acceptance 保持独立，不混入普通 unit test。
 
 stable v1 前必须在 Windows x64、macOS 实际目标架构和 Linux x64 分别执行安装/升级/卸载、单实例、托盘、开机启动、暂停恢复、断网重连与签名验证。未实测架构只能标记 preview。
+
+### 原生安装包与更新验收
+
+`pnpm test:release` 检查更新通道、四目标 manifest、签名/凭据缺失、stable 产品门禁和产物汇总。`pnpm test:driver-startup` 对 20 次真实 Core 冷启动，从发布 Virtual Driver 配置到第一次投递计时，P95 必须不超过 1 秒。`pnpm build:sidecar` 后运行 `pnpm test:sidecar`，验证实际打包的 Core 能发现端口并响应健康检查。
+
+`.github/workflows/package-smoke.yml` 在 Windows x64、macOS x64/arm64、Linux x64 上分别构建安装包，以实际安装后的程序运行 20 次首屏/Core 就绪测量，并检查安装、启动、健康和卸载。安装首屏与 Core 就绪当前都使用 1 秒的严格门禁。`.github/workflows/updater-smoke.yml` 使用每次生成的临时测试密钥和本机更新服务，先验证畸形 manifest、错误签名、签名正确但安装内容损坏，再验证成功升级及 Core 数据保留；这些密钥不是 stable 发布密钥。两个工作流需要在对应平台真实运行，Windows 本地通过不代表 macOS/Linux 通过。
+
+未经过操作系统签名的 alpha/beta 包必须使用 `tools/release/unsigned-config.mjs` 生成醒目的 `Alpha/Beta (Unsigned)` 名称和独立安装标识，且关闭正式 Updater。签名更新由 `tools/release/updater-config.mjs` 按通道写入固定公钥和 HTTPS manifest 地址；Updater 在桌面端只对有效配置启用。`tools/release/manifest.mjs` 能检查四平台签名文件并生成更新 manifest。
+
+### Stable 候选
+
+`.github/workflows/stable-candidate.yml` 只接受已经存在的 `vX.Y.Z` tag，并要求该提交的 #1–#23 验收状态及四项基础门禁、容量与驱动性能门禁通过。Windows 从受保护环境导入代码签名证书，实际检查安装器的 Authenticode、时间戳及篡改拒绝；macOS 导入 Developer ID，实际检查应用签名、Gatekeeper 和 DMG 公证；Linux 检查 AppImage 更新签名与 deb。每个平台还要通过真实安装 smoke，并对候选文件生成构建来源证明。汇总任务核验候选证明对应本次提交，生成四目标 `latest.json` 和五个安装包的 `SHA256SUMS`，把同名的两个 macOS 更新包改为互不覆盖的发布文件名。
+
+候选工作流指定 `stable-signing` 环境；维护者须在 GitHub 为它配置审批保护和以下凭据。需配置更新密钥 `STATE_HUB_TAURI_PRIVATE_KEY`、可选的 `STATE_HUB_TAURI_PRIVATE_KEY_PASSWORD` 和变量 `STATE_HUB_TAURI_PUBLIC_KEY`；Windows 另需 `WINDOWS_CERTIFICATE_BASE64`、`WINDOWS_CERTIFICATE_PASSWORD`、`WINDOWS_TIMESTAMP_URL`；macOS 另需 `APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`。私钥和公证凭据只注入需要它们的步骤，不写入仓库或产物。缺少任一必需值会拒绝构建。候选工作流必须在目标 tag 上手动触发；不能用本地测试密钥代替 stable 凭据。
+
+此工作流只产生候选产物，不自动发布或推送。正式发布前须审查候选产物、签名、公证、证明、所有平台的真实 smoke 和当前仓库的 Issue 进度；缺少凭据或任一检查失败时不得标记 stable。目前 #23 的 Windows 安装首屏性能及 macOS/Linux 真实运行证据未达标，#24 也没有正式凭据下的真实候选验证；两张 Issue 均未 PASS。

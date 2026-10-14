@@ -19,6 +19,7 @@
     "test": "pnpm --filter @state-hub/plugin-kit build && vitest run --exclude \"src/acceptance/**\" --pool=threads --maxWorkers=1",
     "test:acceptance": "pnpm --filter @state-hub/plugin-kit build && node scripts/run-acceptance.mjs",
     "test:performance": "node --import tsx scripts/performance-benchmark.mjs",
+    "test:driver-startup": "node --import tsx scripts/driver-startup-benchmark.mjs",
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js"
   },

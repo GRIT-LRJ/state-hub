@@ -1,10 +1,13 @@
 mod credentials;
 mod lifecycle_smoke;
 mod updater_config;
+mod startup_metrics;
 mod supervisor;
 mod support_bundle;
+mod updates;
 
 use supervisor::{shutdown_core, start_supervisor, CoreState};
+use std::time::Instant;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -71,8 +74,13 @@ fn create_tray(app: &tauri::App) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    run_from_process_entry(Instant::now());
+}
+
+pub fn run_from_process_entry(started: Instant) {
     tauri::Builder::default()
         .manage(CoreState::default())
+        .manage(startup_metrics::StartupMetrics::new(started))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
@@ -88,16 +96,25 @@ pub fn run() {
             credentials::store_secret,
             credentials::secret_status,
             credentials::delete_secret,
-            support_bundle::save_support_bundle
+            support_bundle::save_support_bundle,
+            startup_metrics::record_first_paint,
+            updates::updater_available,
+            updates::check_update,
+            updates::install_update
         ])
         .setup(|app| {
-            if updater_config::configured(app.config().plugins.0.get("updater")) {
-                app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            app.state::<startup_metrics::StartupMetrics>()
+                .version(app.package_info().version.to_string());
+            if updates::configured(app.handle()) {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
             }
             create_tray(app)?;
             #[cfg(feature = "lifecycle-smoke")]
             lifecycle_smoke::start(app.handle().clone());
             start_supervisor(app.handle().clone());
+            #[cfg(feature = "release-smoke")]
+            updates::start_release_smoke(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {

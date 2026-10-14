@@ -8,15 +8,19 @@
   },
   "scripts": {
     "build": "pnpm -r --if-present build",
+    "build:packages": "pnpm --filter \"./packages/**\" -r build",
     "build:sidecar": "node tools/prepare-sidecar.mjs",
     "check": "pnpm -r --if-present check",
     "test": "pnpm build:packages && pnpm -r --if-present test",
     "test:acceptance": "pnpm build:packages && pnpm --filter @state-hub/core test:acceptance && pnpm --filter @state-hub/desktop test:acceptance",
     "test:performance": "pnpm build:packages && pnpm --filter @state-hub/core test:performance",
+    "test:release": "node --test tools/release/*.test.mjs",
+    "test:driver-startup": "pnpm --filter @state-hub/core test:driver-startup",
+    "test:sidecar": "node tools/release/sidecar-smoke.mjs",
+    "prepare:updater-smoke": "node tools/release/prepare-smoke-config.mjs",
     "verify": "pnpm test && pnpm test:acceptance && pnpm check && pnpm build",
     "dev:core": "pnpm --filter @state-hub/core dev",
-    "dev:desktop": "pnpm --filter @state-hub/desktop dev",
-    "build:packages": "pnpm --filter \"./packages/**\" -r build"
+    "dev:desktop": "pnpm --filter @state-hub/desktop dev"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

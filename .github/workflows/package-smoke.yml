@@ -1,0 +1,82 @@
+name: Native package smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            target: windows-x86_64
+            bundles: nsis
+          - runner: macos-15-intel
+            target: darwin-x86_64
+            bundles: dmg
+          - runner: macos-15
+            target: darwin-aarch64
+            bundles: dmg
+          - runner: ubuntu-22.04
+            target: linux-x86_64
+            bundles: appimage,deb
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - name: Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2 xdg-utils xvfb
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify
+      - run: node --test tools/release/*.test.mjs
+      - run: pnpm test:driver-startup
+      - run: pnpm build:sidecar
+      - run: pnpm test:sidecar
+      - run: node tools/release/unsigned-config.mjs .release-smoke/unsigned.json alpha
+      - run: pnpm --filter @state-hub/desktop tauri build --config ../../.release-smoke/unsigned.json --bundles ${{ matrix.bundles }}
+      - name: Windows NSIS install/start/uninstall
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem apps/desktop/src-tauri/target/release/bundle/nsis -Filter '*setup.exe' -File | Select-Object -First 1
+          if (-not $installer) { throw 'NSIS installer missing' }
+          ./tools/release/smoke-windows.ps1 -Installer $installer.FullName
+      - name: macOS DMG install/start/uninstall
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          dmg="$(find apps/desktop/src-tauri/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "$dmg"
+          bash tools/release/smoke-macos.sh "$dmg"
+      - name: Linux AppImage and deb install/start/uninstall
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          appimage="$(find apps/desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -print -quit)"
+          deb="$(find apps/desktop/src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' -print -quit)"
+          test -n "$appimage" && test -n "$deb"
+          xvfb-run -a bash tools/release/smoke-linux.sh "$appimage" "$deb"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.target }}
+          path: apps/desktop/src-tauri/target/release/bundle/
+          if-no-files-found: error
+          retention-days: 7

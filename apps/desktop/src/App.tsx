@@ -8,6 +8,7 @@ import {
 import { Alert, Button, Card, ConfigProvider, Empty, Flex, Layout, Modal, Space, Statistic, Table, Tag, Typography, message, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { fetchSnapshot, getConnection, provisionCodexVirtual, publishConfig, setOutputsPaused, subscribe, type RuntimeSnapshot } from "./api.js";
@@ -21,6 +22,9 @@ import "./app.css";
 const { Header, Content, Footer } = Layout;
 
 export default function App() {
+  const [modal, modalContext] = Modal.useModal();
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updaterAvailable, setUpdaterAvailable] = useState(false);
   const { t } = useTranslation();
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot>();
   const [error, setError] = useState<string>();
@@ -32,6 +36,13 @@ export default function App() {
 
   const refresh = useCallback(() => connectionLoop.current?.requestRefresh(), []);
 
+  useEffect(() => {
+    const firstFrame = requestAnimationFrame(() => {
+      requestAnimationFrame(() => { void invoke("record_first_paint").catch(() => undefined); });
+    });
+    void invoke<boolean>("updater_available").then(setUpdaterAvailable).catch(() => undefined);
+    return () => cancelAnimationFrame(firstFrame);
+  }, []);
   useEffect(() => {
     const loop = new CoreConnectionLoop<RuntimeSnapshot>(
       { connection: getConnection, snapshot: fetchSnapshot, subscribe },
@@ -71,6 +82,20 @@ export default function App() {
     }
   };
 
+  const checkForUpdate = async () => {
+    setUpdateBusy(true);
+    try {
+      const update = await invoke<{ version: string } | null>("check_update");
+      if (!update) { messageApi.info(t("noUpdate")); return; }
+      modal.confirm({ title: t("updateAvailable", { version: update.version }), content: t("updateInstallNotice"),
+        okText: t("installUpdate"), cancelText: t("cancel"), onOk: async () => {
+          try { await invoke("install_update", { expectedVersion: update.version }); messageApi.success(t("updateInstalled")); }
+          catch { messageApi.error(t("updateFailed")); }
+        } });
+    } catch { messageApi.error(t("updateCheckFailed")); }
+    finally { setUpdateBusy(false); }
+  };
+
   const quickstart = async () => {
     setBusy(true);
     try {
@@ -94,6 +119,7 @@ export default function App() {
     <ConfigProvider locale={zhCN} theme={{ algorithm: theme.defaultAlgorithm, token: { colorPrimary: "#5b5bd6", borderRadius: 10 } }}>
       <Layout className="app-shell">
         {contextHolder}
+        {modalContext}
         <Header className="app-header">
           <Space size="middle">
             <div className="brand-mark"><ApiOutlined /></div>
@@ -103,6 +129,7 @@ export default function App() {
             </div>
           </Space>
           <Space>
+            {updaterAvailable && <Button loading={updateBusy} onClick={() => void checkForUpdate()}>{t("checkForUpdate")}</Button>}
             <Tag color={snapshot ? "success" : "error"}>{snapshot ? t("connected") : t("disconnected")}</Tag>
             <Button
               danger={!snapshot?.outputsPaused}

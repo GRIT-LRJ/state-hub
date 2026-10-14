@@ -1,0 +1,243 @@
+name: Stable signed candidate gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing vX.Y.Z tag to verify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  product:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Require an existing version tag
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          test "$GITHUB_REF" = "refs/tags/v$RELEASE_VERSION"
+          git rev-parse "v$RELEASE_VERSION^{commit}" >/dev/null
+      - name: Linux test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2 xdg-utils xvfb
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify
+      - run: pnpm test:release
+      - run: pnpm test:driver-startup
+      - run: pnpm test:performance
+      - name: Require Issue 1 through 23 acceptance at this candidate HEAD
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: node tools/release/stable-policy.mjs "$RELEASE_VERSION"
+
+  signed:
+    needs: product
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            target: windows-x86_64
+            platform: windows
+            bundles: nsis
+          - runner: macos-15-intel
+            target: darwin-x86_64
+            platform: darwin
+            bundles: dmg
+          - runner: macos-15
+            target: darwin-aarch64
+            platform: darwin
+            bundles: dmg
+          - runner: ubuntu-22.04
+            target: linux-x86_64
+            platform: linux
+            bundles: appimage,deb
+    runs-on: ${{ matrix.runner }}
+    environment: stable-signing
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - name: Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2 xdg-utils xvfb
+      - run: pnpm install --frozen-lockfile
+      - name: Import Windows signing certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE_BASE64 -or -not $env:WINDOWS_CERTIFICATE_PASSWORD) { throw 'Windows signing credential missing' }
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'state-hub-sign.pfx'
+          [System.IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          $securePassword = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password $securePassword
+          if (-not $certificate -or -not $certificate.HasPrivateKey) { throw 'Windows signing certificate import failed' }
+          "STATE_HUB_WINDOWS_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Import Apple Developer ID certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          test -n "$APPLE_CERTIFICATE" && test -n "$APPLE_CERTIFICATE_PASSWORD"
+          certificate="$RUNNER_TEMP/state-hub-sign.p12"
+          keychain="$RUNNER_TEMP/state-hub-sign.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+          password="$(openssl rand -hex 24)"
+          security create-keychain -p "$password" "$keychain"
+          security default-keychain -s "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security set-keychain-settings -t 3600 -u "$keychain"
+          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain"
+          identity="$(security find-identity -v -p codesigning "$keychain" | grep 'Developer ID Application:' | awk -F '"' '{print $2}')"
+          test "$(printf '%s\n' "$identity" | grep -c 'Developer ID Application:')" = 1
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+      - name: Reject missing signing inputs and write updater config
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.STATE_HUB_TAURI_PRIVATE_KEY }}
+          STATE_HUB_UPDATER_PUBLIC_KEY: ${{ vars.STATE_HUB_TAURI_PUBLIC_KEY }}
+          WINDOWS_CERTIFICATE_BASE64: ${{ matrix.platform == 'windows' && secrets.WINDOWS_CERTIFICATE_BASE64 || '' }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ matrix.platform == 'windows' && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+          WINDOWS_TIMESTAMP_URL: ${{ matrix.platform == 'windows' && vars.WINDOWS_TIMESTAMP_URL || '' }}
+          APPLE_CERTIFICATE: ${{ matrix.platform == 'darwin' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ matrix.platform == 'darwin' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ matrix.platform == 'darwin' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ matrix.platform == 'darwin' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'darwin' && secrets.APPLE_TEAM_ID || '' }}
+        run: |
+          node tools/release/stable-policy.mjs "$RELEASE_VERSION" '${{ matrix.platform }}'
+          node tools/release/stable-config.mjs '${{ matrix.platform }}' "$(pwd)/.release-smoke/stable.json"
+      - run: pnpm build:sidecar
+      - run: pnpm test:sidecar
+      - name: Build signed native candidate and updater artifact
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.STATE_HUB_TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.STATE_HUB_TAURI_PRIVATE_KEY_PASSWORD }}
+          APPLE_ID: ${{ matrix.platform == 'darwin' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ matrix.platform == 'darwin' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'darwin' && secrets.APPLE_TEAM_ID || '' }}
+        run: pnpm --filter @state-hub/desktop tauri build --ci --config "$(pwd)/.release-smoke/stable.json" --bundles ${{ matrix.bundles }}
+      - name: Verify real Windows Authenticode signature
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem apps/desktop/src-tauri/target/release/bundle/nsis -Filter '*setup.exe' -File | Select-Object -First 1
+          if (-not $installer) { throw 'Signed Windows installer missing' }
+          ./tools/release/verify-windows-signature.ps1 -Installer $installer.FullName
+          ./tools/release/smoke-windows.ps1 -Installer $installer.FullName
+      - name: Verify real Apple signature and notarization
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          app="$(find apps/desktop/src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)"
+          dmg="$(find apps/desktop/src-tauri/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "$app" && test -n "$dmg"
+          bash tools/release/verify-macos-signature.sh "$app" "$dmg"
+          bash tools/release/smoke-macos.sh "$dmg"
+      - name: Verify real Linux packages
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          appimage="$(find apps/desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -print -quit)"
+          deb="$(find apps/desktop/src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' -print -quit)"
+          test -n "$appimage" && test -n "$deb" && test -f "$appimage.sig"
+          xvfb-run -a bash tools/release/smoke-linux.sh "$appimage" "$deb"
+      - uses: actions/attest@v4
+        with:
+          subject-path: apps/desktop/src-tauri/target/release/bundle/**/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stable-candidate-${{ matrix.target }}
+          path: apps/desktop/src-tauri/target/release/bundle/
+          if-no-files-found: error
+          retention-days: 30
+
+  assemble:
+    needs: signed
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: stable-candidate-*
+          path: .release-smoke/candidates
+      - name: Verify candidate build provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          count=0
+          while IFS= read -r -d '' file; do
+            gh attestation verify "$file" --repo GRIT-LRJ/state-hub \
+              --signer-workflow GRIT-LRJ/state-hub/.github/workflows/stable-candidate.yml \
+              --source-digest "$GITHUB_SHA"
+            count=$((count + 1))
+          done < <(find .release-smoke/candidates -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.AppImage' -o -name '*.deb' \) -print0)
+          test "$count" -eq 7
+      - name: Assemble unique release assets and stable updater manifest
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: node tools/release/stable-artifacts.mjs .release-smoke/candidates "$RELEASE_VERSION" .release-smoke/release-files
+      - uses: actions/attest@v4
+        with:
+          subject-path: |
+            .release-smoke/release-files/latest.json
+            .release-smoke/release-files/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stable-candidate-release-assets
+          path: .release-smoke/release-files/
+          if-no-files-found: error
+          retention-days: 30

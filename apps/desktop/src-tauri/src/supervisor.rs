@@ -1,3 +1,4 @@
+use crate::startup_metrics::StartupMetrics;
 use rand::RngCore;
 use serde::Serialize;
 use std::{
@@ -168,6 +169,7 @@ async fn supervise(app: AppHandle) {
                                     };
                                     if accepted {
                                         ready = true;
+                                        app.state::<StartupMetrics>().core_ready();
                                         let _ = app.emit(
                                             "core-ready",
                                             serde_json::json!({ "generation": generation }),

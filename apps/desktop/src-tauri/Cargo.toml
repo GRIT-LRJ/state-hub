@@ -8,6 +8,7 @@ edition = "2021"
 
 [features]
 lifecycle-smoke = []
+release-smoke = []
 
 [lib]
 name = "state_hub_desktop_lib"

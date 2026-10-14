@@ -1,0 +1,89 @@
+name: Signed updater smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  updater:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            target: windows-x86_64
+            bundles: nsis
+          - runner: macos-15-intel
+            target: darwin-x86_64
+            bundles: dmg
+          - runner: macos-15
+            target: darwin-aarch64
+            bundles: dmg
+          - runner: ubuntu-22.04
+            target: linux-x86_64
+            bundles: appimage
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - name: Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2 xdg-utils xvfb
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:sidecar
+      - run: pnpm test:sidecar
+      - run: pnpm prepare:updater-smoke
+      - name: Build older signed test installer
+        shell: bash
+        run: pnpm --filter @state-hub/desktop tauri build --ci --features release-smoke --config "$STATE_HUB_SMOKE_BASE_CONFIG" --bundles ${{ matrix.bundles }}
+      - run: node tools/release/stage-baseline.mjs
+      - name: Build signed test candidate
+        shell: bash
+        run: pnpm --filter @state-hub/desktop tauri build --ci --features release-smoke --config "$STATE_HUB_SMOKE_CANDIDATE_CONFIG" --bundles ${{ matrix.bundles }}
+      - name: Sign a broken test installer
+        shell: bash
+        run: |
+          printf 'invalid installed application' > .release-smoke/invalid.bin
+          pnpm --filter @state-hub/desktop tauri signer sign -p '' -f "$TAURI_SIGNING_PRIVATE_KEY_PATH" "$(pwd)/.release-smoke/invalid.bin"
+      - name: Windows updater and rollback
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $baseline = Get-ChildItem .release-smoke/baseline-bundle/nsis -Filter '*setup.exe' -File |
+            Where-Object { $_.Name -like "*$env:STATE_HUB_SMOKE_BASE_VERSION*" } | Select-Object -First 1
+          $signature = Get-ChildItem apps/desktop/src-tauri/target/release/bundle/nsis -Filter '*.exe.sig' -File |
+            Where-Object { $_.Name -like "*$env:STATE_HUB_SMOKE_CANDIDATE_VERSION*" } | Select-Object -First 1
+          if (-not $baseline -or -not $signature) { throw 'Signed Windows updater artifacts missing' }
+          $candidate = $signature.FullName.Substring(0, $signature.FullName.Length - 4)
+          ./tools/release/smoke-updater-windows.ps1 -BaselineInstaller $baseline.FullName -CandidateArtifact $candidate -InvalidArtifact (Resolve-Path .release-smoke/invalid.bin).Path
+      - name: macOS updater and rollback
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          baseline="$(find .release-smoke/baseline-bundle/dmg -maxdepth 1 -name "*$STATE_HUB_SMOKE_BASE_VERSION*.dmg" -print -quit)"
+          candidate_sig="$(find apps/desktop/src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app.tar.gz.sig' -print -quit)"
+          test -n "$baseline" && test -n "$candidate_sig"
+          bash tools/release/smoke-updater-macos.sh "$baseline" "${candidate_sig%.sig}" "$(pwd)/.release-smoke/invalid.bin"
+      - name: Linux updater and rollback
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          baseline="$(find .release-smoke/baseline-bundle/appimage -maxdepth 1 -name "*$STATE_HUB_SMOKE_BASE_VERSION*.AppImage" -print -quit)"
+          candidate_sig="$(find apps/desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -name "*$STATE_HUB_SMOKE_CANDIDATE_VERSION*.AppImage.sig" -print -quit)"
+          test -n "$baseline" && test -n "$candidate_sig"
+          xvfb-run -a bash tools/release/smoke-updater-linux.sh "$baseline" "${candidate_sig%.sig}" "$(pwd)/.release-smoke/invalid.bin"

@@ -13,6 +13,7 @@ target/
 *.db-wal
 .state-hub-runtime/
 .pkg-cache/
+.release-smoke/
 state-hub-core-*.exe
 apps/desktop/src-tauri/gen/
 apps/desktop/src-tauri/binaries/
