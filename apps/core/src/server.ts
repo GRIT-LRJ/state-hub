@@ -482,7 +482,10 @@ export function createServer(options: ServerOptions): FastifyInstance {
   }));
 
   app.post("/api/v1/admin/producers", { preHandler: adminAuth }, async (request, reply) => {
-    const body = (request.body ?? {}) as { producerId?: unknown; sourceDefinitionId?: unknown };
+    const body = (request.body ?? {}) as { producerId?: unknown; sourceDefinitionId?: unknown; createOnly?: unknown };
+    if (body.createOnly !== undefined && typeof body.createOnly !== "boolean") {
+      return await reply.code(400).send({ error: { code: "INVALID_REQUEST", message: "createOnly must be boolean" } });
+    }
     if (typeof body.producerId !== "string" ||
       !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(body.producerId)) {
       return await reply.code(400).send({ error: { code: "INVALID_PRODUCER_ID", message: "Invalid producer id" } });
@@ -492,7 +495,14 @@ export function createServer(options: ServerOptions): FastifyInstance {
       return await reply.code(400).send({ error: { code: "UNKNOWN_SOURCE_DEFINITION", message: "Unknown source definition" } });
     }
     const token = generateToken();
-    registerProducer(options.service.db, body.producerId, token, body.sourceDefinitionId);
+    const producerId = body.producerId;
+    const sourceDefinitionId = body.sourceDefinitionId;
+    options.service.db.raw.transaction(() => {
+      if (body.createOnly && options.service.db.raw.prepare("SELECT 1 FROM producer_tokens WHERE producer_id = ?").get(producerId)) {
+        throw new HubError("PRODUCER_EXISTS", "Producer already exists; explicit rotation is required", 409);
+      }
+      registerProducer(options.service.db, producerId, token, sourceDefinitionId);
+    }).immediate();
     return await reply.code(201).send({ producerId: body.producerId, token });
   });
 

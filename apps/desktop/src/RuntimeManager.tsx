@@ -12,8 +12,8 @@ function safeError(reason: unknown): string {
     ? reason.message : "RUNTIME_OPERATION_FAILED";
 }
 
-export function RuntimeManager({ claims, disabled, onChanged }: {
-  claims: StateClaim[]; disabled: boolean; onChanged(): void;
+export function RuntimeManager({ claims, disabled, onChanged, view = "all" }: {
+  claims: StateClaim[]; disabled: boolean; onChanged(): void; view?: "all" | "claims" | "support";
 }) {
   const { t } = useTranslation();
   const [preview, setPreview] = useState<DiagnosticPreview>();
@@ -37,12 +37,13 @@ export function RuntimeManager({ claims, disabled, onChanged }: {
   return <Space direction="vertical" className="runtime-manager">
     {error && <Alert type="error" role="alert"
       message={t("runtimeFailed", { code: error })} />}
-    <Card title={t("claims")} className="data-card">
+    {view !== "support" && <Card title={t("claims")} className="data-card">
+      <Typography.Paragraph type="secondary">来源当前报告的事实，不是历史日志。确认只针对这一次状态；只有尊重确认的规则会停止提醒。</Typography.Paragraph>
       <Table rowKey={(row) => JSON.stringify([row.producerId, row.scopeId, row.signalId])}
         dataSource={claims} pagination={{ pageSize: 20 }}
         expandable={{ expandedRowRender: (claim) =>
           <pre aria-label={t("claimValue")}>{JSON.stringify(claim.value, null, 2)}</pre> }}
-        columns={[
+        size="small" scroll={{ x: 620 }} columns={[
           { title: t("producer"), dataIndex: "producerId" },
           { title: t("scope"), dataIndex: "scopeId" },
           { title: t("signal"), dataIndex: "signalId" },
@@ -60,8 +61,8 @@ export function RuntimeManager({ claims, disabled, onChanged }: {
             </Popconfirm> },
         ]}
         locale={{ emptyText: t("noClaims") }} />
-    </Card>
-    <Card title={t("diagnostics")} className="data-card">
+    </Card>}
+    {view !== "claims" && <Card title={t("diagnostics")} className="data-card">
       <Typography.Paragraph>{t("diagnosticsNotice")}</Typography.Paragraph>
       <Button disabled={disabled || busy} onClick={() => void run(async () => {
         setPreview(undefined);
@@ -81,6 +82,6 @@ export function RuntimeManager({ claims, disabled, onChanged }: {
           })}>{t("exportSupportBundle")}</Button>
       </div>}
       {saved && <Typography.Text role="status">{t("supportSaved")}</Typography.Text>}
-    </Card>
+    </Card>}
   </Space>;
 }

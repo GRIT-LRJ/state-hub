@@ -39,14 +39,13 @@ Core 启动时运行一次历史保留维护，之后默认每小时运行。生
 
 ## 首次配置
 
-桌面首页的“配置 Codex + 虚拟输出”会：
+桌面使用分步配置，各步可以独立完成：
 
-1. 创建绑定到 `official.codex` SourceDefinition 的 `codex` producer。
-2. 将 producer token 写入 OS keyring 的 `dev.statehub.desktop / producer:codex`，不生成明文凭据文件。
-3. 创建配置草稿并显示影响预览。
-4. 用户确认后发布 `Codex status → virtual-main/codex-status` 绑定。
+1. 在“来源”的“Codex 接入引导”创建绑定到 `official.codex` 的接入方，并把 Token 保存到系统凭据库的 `dev.statehub.desktop / producer:codex`。已有授权与凭据时不会自动轮换。
+2. 在“输出”的“虚拟输出引导”审阅并应用虚拟输出。可以到此结束，不要求同时创建规则。
+3. 选择“继续添加规则”，在“规则”审阅并应用 Codex 状态到虚拟输出的联动。发送端还需配置下面的 Codex hook，才能实际报告状态。
 
-如果 OS keyring 不可用，配置应保持禁用；不得改用明文文件。
+来源授权与密钥保存立即生效，输出和规则分别审阅应用。如果系统凭据库写入失败，界面会保留一次性 Token 供用户处理并显示错误，不生成明文凭据文件，也不把凭据准备记作成功。完整六栏说明见 [界面设计与使用讲解](../apps/desktop/docs/UI-DESIGN.md)。
 
 ## Codex Hook
 

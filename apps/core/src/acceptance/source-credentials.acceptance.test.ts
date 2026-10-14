@@ -7,6 +7,25 @@ import { describe, expect, it } from "vitest";
 import { CoreAcceptanceHarness } from "./harness.js";
 
 describe("source and credential management through the real Core", () => {
+  it("rejects concurrent create-only requests without rotating the winning token", async () => {
+    const harness = await CoreAcceptanceHarness.start();
+    try {
+      const create = () => harness.fetch("/api/v1/admin/producers", {
+        method: "POST", headers: { authorization: `Bearer ${harness.adminToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ producerId: "create-only-source", sourceDefinitionId: "official.custom-http", createOnly: true }),
+      });
+      const responses = await Promise.all([create(), create()]);
+      expect(responses.map((response) => response.status).sort()).toEqual([201, 409]);
+      const winner = await responses.find((response) => response.status === 201)!.json() as { token: string };
+      const rejected = await responses.find((response) => response.status === 409)!.json();
+      expect(rejected).toMatchObject({ error: { code: "PRODUCER_EXISTS" } });
+      const authorized = await harness.fetch("/api/v1/producers/create-only-source/commands/absent", {
+        headers: { authorization: `Bearer ${winner.token}` },
+      });
+      expect(authorized.status).toBe(404);
+    } finally { await harness.dispose(); }
+  }, 20_000);
+
   it.skipIf(process.platform !== "win32")("delivers with a real OS credential and never persists its value", async () => {
     const reference = `pushplus:acceptance:${process.pid}`;
     const secret = "disposable-acceptance-secret";

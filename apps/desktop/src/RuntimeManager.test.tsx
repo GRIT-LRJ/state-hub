@@ -39,7 +39,7 @@ describe("runtime management", () => {
     render(<RuntimeManager claims={[claim]} disabled={false} onChanged={changed} />);
     expect(screen.getByText("17")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "确认此版本" }));
-    await screen.findByText("确认声明版本 17？");
+    await screen.findByText("确认状态版本 17？");
     expect(screen.getByText('["producer_a","b","c"]')).toBeTruthy();
     fireEvent.click(screen.getAllByRole("button", { name: "确认此版本" }).at(-1)!);
     await waitFor(() => expect(acknowledgeClaim).toHaveBeenCalledWith(claim));
@@ -50,7 +50,7 @@ describe("runtime management", () => {
     vi.mocked(acknowledgeClaim).mockRejectedValue(new Error("CLAIM_REVISION_MISMATCH"));
     render(<RuntimeManager claims={[claim]} disabled={false} onChanged={() => undefined} />);
     fireEvent.click(screen.getByRole("button", { name: "确认此版本" }));
-    await screen.findByText("确认声明版本 17？");
+    await screen.findByText("确认状态版本 17？");
     fireEvent.click(screen.getAllByRole("button", { name: "确认此版本" }).at(-1)!);
     expect((await screen.findByRole("alert")).textContent).toContain("CLAIM_REVISION_MISMATCH");
   });

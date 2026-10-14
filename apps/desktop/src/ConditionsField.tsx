@@ -1,6 +1,6 @@
 import type { BindingCondition, ConditionOperator } from "@state-hub/protocol";
 import type { FieldProps } from "@rjsf/utils";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 const operators: ConditionOperator[] = ["eq", "neq", "contains", "gt", "gte", "lt", "lte", "exists"];
 
@@ -31,6 +31,10 @@ function ConditionValueInput({ index, value, disabled, onChange, onValidityChang
 export function ConditionsField({ formData, onChange, fieldPathId, disabled, readonly,
   registry }: FieldProps) {
   const conditions = (formData ?? []) as BindingCondition[];
+  const sequence = useRef(0);
+  const keys = useRef<number[]>([]);
+  while (keys.current.length < conditions.length) keys.current.push(++sequence.current);
+  if (keys.current.length > conditions.length) keys.current.length = conditions.length;
   const setInvalid = (registry.formContext as {
     onConditionsValidityChange?: (index: number, invalid: boolean, removed?: boolean) => void;
   } | undefined)?.onConditionsValidityChange;
@@ -38,7 +42,7 @@ export function ConditionsField({ formData, onChange, fieldPathId, disabled, rea
     onChange(conditions.map((entry, position) => position === index ? condition : entry), fieldPathId.path);
   return <fieldset className="mapping-field">
     <legend>条件</legend>
-    {conditions.map((condition, index) => <div key={index} className="mapping-entry">
+    {conditions.map((condition, index) => <div key={keys.current[index]} className="mapping-entry">
       <label>JSON Pointer {index + 1}
         <input aria-label={`条件指针 ${index + 1}`} value={condition.pointer}
           disabled={disabled || readonly}
@@ -60,6 +64,7 @@ export function ConditionsField({ formData, onChange, fieldPathId, disabled, rea
         onChange={(value) => update(index, { ...condition, value })}
         onValidityChange={(position, invalid) => setInvalid?.(position, invalid)} />}
       <button type="button" disabled={disabled || readonly} onClick={() => {
+        keys.current.splice(index, 1);
         onChange(conditions.filter((_, position) => position !== index), fieldPathId.path);
         setInvalid?.(index, false, true);
       }}>移除条件 {index + 1}</button>

@@ -58,10 +58,11 @@ export async function listProducers(): Promise<ManagedProducer[]> {
   return ((await response.json()) as { producers: ManagedProducer[] }).producers;
 }
 
-export async function issueProducerToken(producerId: string, sourceDefinitionId: string): Promise<string> {
+export async function issueProducerToken(producerId: string, sourceDefinitionId: string, createOnly = false): Promise<string> {
   const response = await coreFetch("/api/v1/admin/producers", {
-    method: "POST", body: JSON.stringify({ producerId, sourceDefinitionId }),
+    method: "POST", body: JSON.stringify({ producerId, sourceDefinitionId, ...(createOnly ? { createOnly: true } : {}) }),
   });
+  if (response.status === 409) throw new Error("PRODUCER_EXISTS");
   requireOk(response, "PRODUCER_SAVE_FAILED");
   return ((await response.json()) as { token: string }).token;
 }

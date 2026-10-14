@@ -6,6 +6,41 @@ export interface DiagnosticPreview {
   redaction: string[];
 }
 
+export interface DiagnosticDelivery {
+  deliveryId: string;
+  driverInstanceId: string;
+  status: "pending" | "leased" | "delivered" | "dead-letter" | "suppressed";
+  actionKind: string;
+  attemptCount: number;
+  createdAt: string | null;
+  completedAt: string | null;
+  lastError: string | null;
+}
+
+export function parseDiagnosticDeliveries(text: string): { generatedAt: string; deliveries: DiagnosticDelivery[] } {
+  const data = JSON.parse(text) as Record<string, unknown>;
+  if (!data || typeof data !== "object" || data.schemaVersion !== 1 || !Array.isArray(data.deliveries) || typeof data.generatedAt !== "string") {
+    throw new Error("INVALID_SUPPORT_BUNDLE");
+  }
+  const deliveries = data.deliveries.slice(0, 500).map((item: Record<string, unknown>) => {
+    if (!item || typeof item !== "object" || typeof item.deliveryId !== "string" ||
+      typeof item.status !== "string" || !["pending", "leased", "delivered", "dead-letter", "suppressed"].includes(item.status)) {
+      throw new Error("INVALID_SUPPORT_BUNDLE");
+    }
+    return {
+      deliveryId: item.deliveryId, driverInstanceId: typeof item.driverInstanceId === "string" ? item.driverInstanceId : "未知",
+      status: item.status as DiagnosticDelivery["status"],
+      actionKind: typeof item.actionKind === "string" && ["stateful", "queued-effect", "append-only"].includes(item.actionKind) ? item.actionKind : "未知",
+      attemptCount: typeof item.attemptCount === "number" && Number.isSafeInteger(item.attemptCount) && item.attemptCount >= 0 ? item.attemptCount : 0,
+      createdAt: typeof item.createdAt === "string" ? item.createdAt : null,
+      completedAt: typeof item.completedAt === "string" ? item.completedAt : null,
+      lastError: typeof item.lastError === "string" && /^(HTTP [1-5]\d{2}|Retry budget exhausted|Delivery TTL expired|Driver error details withheld)$/u.test(item.lastError)
+        ? item.lastError : item.lastError ? "Driver error details withheld" : null,
+    };
+  });
+  return { generatedAt: data.generatedAt, deliveries };
+}
+
 async function checked(response: Response): Promise<Response> {
   if (response.ok) return response;
   let code: unknown;
